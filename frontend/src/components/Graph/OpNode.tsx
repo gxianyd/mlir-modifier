@@ -1,0 +1,135 @@
+import { memo } from 'react';
+import { Handle, Position } from '@xyflow/react';
+import type { NodeProps, Node } from '@xyflow/react';
+import type { AttributeInfo, ValueInfo } from '../../types/ir';
+
+export interface OpNodeData {
+  label: string;
+  dialect: string;
+  attributes: Record<string, AttributeInfo>;
+  operands: ValueInfo[];
+  results: ValueInfo[];
+  hasRegions: boolean;
+  [key: string]: unknown;
+}
+
+export type OpNodeType = Node<OpNodeData, 'opNode'>;
+
+const DIALECT_COLORS: Record<string, { header: string; border: string }> = {
+  arith: { header: '#4a7fb5', border: '#3a6a9b' },
+  func: { header: '#6b8e5e', border: '#5a7d4d' },
+  scf: { header: '#9b6b8e', border: '#8a5a7d' },
+  linalg: { header: '#b58a4a', border: '#a47939' },
+  memref: { header: '#5eaaaa', border: '#4d9999' },
+  tensor: { header: '#aa7a5e', border: '#996944' },
+  tosa: { header: '#7a5eaa', border: '#694d99' },
+};
+
+const DEFAULT_COLOR = { header: '#666', border: '#555' };
+
+function getDialectColor(dialect: string) {
+  return DIALECT_COLORS[dialect] || DEFAULT_COLOR;
+}
+
+function OpNode({ data }: NodeProps<OpNodeType>) {
+  const color = getDialectColor(data.dialect);
+  const attrEntries = Object.entries(data.attributes);
+
+  return (
+    <div style={{
+      minWidth: 180,
+      border: `1px solid ${color.border}`,
+      borderRadius: 6,
+      background: '#fff',
+      boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
+      fontSize: 12,
+      overflow: 'hidden',
+    }}>
+      {/* Input handles */}
+      {data.operands.map((_, i) => (
+        <Handle
+          key={`in-${i}`}
+          type="target"
+          position={Position.Top}
+          id={`in-${i}`}
+          style={{
+            left: `${((i + 1) / (data.operands.length + 1)) * 100}%`,
+            background: color.header,
+            width: 8,
+            height: 8,
+            border: '2px solid #fff',
+          }}
+        />
+      ))}
+
+      {/* Header */}
+      <div style={{
+        background: color.header,
+        color: '#fff',
+        padding: '6px 10px',
+        fontWeight: 600,
+        textAlign: 'center',
+        letterSpacing: 0.3,
+      }}>
+        {data.label}
+      </div>
+
+      {/* Attributes */}
+      {attrEntries.length > 0 && (
+        <div style={{ padding: '4px 10px 6px' }}>
+          {attrEntries.map(([name, attr]) => (
+            <div key={name} style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              padding: '2px 0',
+              gap: 8,
+            }}>
+              <span style={{ color: '#888' }}>{name}</span>
+              <span style={{
+                color: '#333',
+                maxWidth: 120,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
+                {attr.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Regions indicator */}
+      {data.hasRegions && (
+        <div style={{
+          padding: '2px 10px 4px',
+          color: '#aaa',
+          fontSize: 11,
+          textAlign: 'center',
+          borderTop: '1px dashed #eee',
+        }}>
+          [regions]
+        </div>
+      )}
+
+      {/* Output handles */}
+      {data.results.map((_, i) => (
+        <Handle
+          key={`out-${i}`}
+          type="source"
+          position={Position.Bottom}
+          id={`out-${i}`}
+          style={{
+            left: `${((i + 1) / (data.results.length + 1)) * 100}%`,
+            background: color.header,
+            width: 8,
+            height: 8,
+            border: '2px solid #fff',
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+export default memo(OpNode);
