@@ -10,6 +10,14 @@ export interface OpNodeData {
   operands: ValueInfo[];
   results: ValueInfo[];
   hasRegions: boolean;
+  /**
+   * When true, this op has regions that are NOT expanded inline
+   * (depth exceeded maxExpandDepth). The user can double-click to
+   * drill into the collapsed regions.
+   */
+  collapsed?: boolean;
+  /** Number of regions on this op (shown in the collapsed indicator) */
+  regionCount?: number;
   [key: string]: unknown;
 }
 
@@ -41,7 +49,10 @@ function OpNode({ data }: NodeProps<OpNodeType>) {
       border: `1px solid ${color.border}`,
       borderRadius: 6,
       background: '#fff',
-      boxShadow: '0 2px 6px rgba(0,0,0,0.1)',
+      // Collapsed nodes get a deeper shadow to hint "there's more inside"
+      boxShadow: data.collapsed
+        ? '0 3px 10px rgba(0,0,0,0.18)'
+        : '0 2px 6px rgba(0,0,0,0.1)',
       fontSize: 12,
       overflow: 'hidden',
     }}>
@@ -99,16 +110,20 @@ function OpNode({ data }: NodeProps<OpNodeType>) {
         </div>
       )}
 
-      {/* Regions indicator */}
+      {/* Regions indicator — collapsed ops show a drill-in hint */}
       {data.hasRegions && (
         <div style={{
           padding: '2px 10px 4px',
-          color: '#aaa',
+          color: data.collapsed ? color.header : '#aaa',
           fontSize: 11,
           textAlign: 'center',
           borderTop: '1px dashed #eee',
+          cursor: data.collapsed ? 'pointer' : 'default',
+          fontWeight: data.collapsed ? 500 : 400,
         }}>
-          [regions]
+          {data.collapsed
+            ? `▶ ${data.regionCount ?? 1} region(s) — double-click to expand`
+            : '[regions]'}
         </div>
       )}
 

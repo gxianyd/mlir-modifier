@@ -1,14 +1,33 @@
-import { Upload, Button, Space } from 'antd';
+import { Upload, Button, Space, Select } from 'antd';
 import { UploadOutlined, DownloadOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
+
+/** A top-level function entry for the function selector */
+interface FunctionOption {
+  opId: string;
+  label: string;  // e.g. "@add_mul"
+}
 
 interface ToolbarProps {
   onFileLoad: (file: File) => void;
   onSave: () => void;
   hasModel: boolean;
+  /** List of top-level func.func ops available for viewing */
+  functions: FunctionOption[];
+  /** Currently selected function's op_id (null if none selected) */
+  selectedFuncId: string | null;
+  /** Called when user picks a different function from the dropdown */
+  onSelectFunction: (funcOpId: string) => void;
 }
 
-export default function Toolbar({ onFileLoad, onSave, hasModel }: ToolbarProps) {
+export default function Toolbar({
+  onFileLoad,
+  onSave,
+  hasModel,
+  functions,
+  selectedFuncId,
+  onSelectFunction,
+}: ToolbarProps) {
   const uploadProps: UploadProps = {
     accept: '.mlir',
     showUploadList: false,
@@ -38,6 +57,20 @@ export default function Toolbar({ onFileLoad, onSave, hasModel }: ToolbarProps) 
         >
           Save
         </Button>
+
+        {/* Function selector — shown when the model has functions */}
+        {functions.length > 0 && (
+          <Select
+            value={selectedFuncId ?? undefined}
+            onChange={onSelectFunction}
+            style={{ minWidth: 180 }}
+            placeholder="Select function..."
+            options={functions.map((f) => ({
+              value: f.opId,
+              label: f.label,
+            }))}
+          />
+        )}
       </Space>
     </div>
   );
