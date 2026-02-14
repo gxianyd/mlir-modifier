@@ -1,9 +1,13 @@
 import dagre from '@dagrejs/dagre';
 import type { Node, Edge } from '@xyflow/react';
 
-/** Fixed dimensions for all op nodes — consistent card size */
+/** Fixed dimensions for op nodes */
 const NODE_WIDTH = 200;
 const NODE_HEIGHT = 80;
+
+/** Smaller dimensions for input (block argument) nodes */
+const INPUT_NODE_WIDTH = 140;
+const INPUT_NODE_HEIGHT = 44;
 
 /**
  * Compute positions for all nodes using dagre (top-to-bottom DAG layout).
@@ -26,9 +30,13 @@ export function layoutGraph(
   g.setGraph({ rankdir: 'TB', nodesep: 50, ranksep: 80 });
   g.setDefaultEdgeLabel(() => ({}));
 
-  // Register all nodes with uniform size
+  // Register nodes with type-appropriate sizes
   for (const node of nodes) {
-    g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    const isInput = node.type === 'inputNode';
+    g.setNode(node.id, {
+      width: isInput ? INPUT_NODE_WIDTH : NODE_WIDTH,
+      height: isInput ? INPUT_NODE_HEIGHT : NODE_HEIGHT,
+    });
   }
 
   // Register edges for dagre ranking
@@ -41,11 +49,14 @@ export function layoutGraph(
   // Apply computed positions (dagre returns center coords, convert to top-left)
   const layoutedNodes = nodes.map((node) => {
     const pos = g.node(node.id);
+    const isInput = node.type === 'inputNode';
+    const w = isInput ? INPUT_NODE_WIDTH : NODE_WIDTH;
+    const h = isInput ? INPUT_NODE_HEIGHT : NODE_HEIGHT;
     return {
       ...node,
       position: {
-        x: pos.x - NODE_WIDTH / 2,
-        y: pos.y - NODE_HEIGHT / 2,
+        x: pos.x - w / 2,
+        y: pos.y - h / 2,
       },
     };
   });

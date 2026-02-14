@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -7,10 +7,13 @@ import {
   useNodesState,
   useEdgesState,
   type NodeTypes,
+  type Connection,
+  type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
 import OpNode from './OpNode';
+import InputNode from './InputNode';
 import { irToFlow } from './irToFlow';
 import { layoutGraph } from './layoutGraph';
 import type { IRGraph, OperationInfo } from '../../types/ir';
@@ -24,6 +27,16 @@ interface GraphViewProps {
   onSelectOp: (op: OperationInfo | null) => void;
   /** Callback when user double-clicks a collapsed node to drill into it */
   onDrillIn: (opId: string) => void;
+  /** Callback when user requests to delete the selected op */
+  onDeleteOp?: (opId: string) => void;
+  /** Callback when user connects two handles (add edge) */
+  onConnect?: (targetOpId: string, sourceValueId: string, operandIndex: number | null) => void;
+  /** Callback when user deletes an edge */
+  onDeleteEdge?: (targetOpId: string, operandIndex: number) => void;
+  /** Callback when user reconnects an edge to a different source */
+  onReconnectEdge?: (targetOpId: string, operandIndex: number, newValueId: string) => void;
+  /** Callback when user adds an op result to the function output */
+  onAddToOutput?: (opId: string, resultIndex: number) => void;
 }
 
 /**
@@ -32,7 +45,43 @@ interface GraphViewProps {
  */
 const nodeTypes: NodeTypes = {
   opNode: OpNode,
+  inputNode: InputNode,
 };
+
+/**
+ * Parse a handle ID like "out-0" or "in-1" to extract the index.
+ */
+function parseHandleIndex(handleId: string | null | undefined): number {
+  if (!handleId) return 0;
+  const parts = handleId.split('-');
+  return parseInt(parts[parts.length - 1], 10) || 0;
+}
+
+/**
+ * Resolve a source node + handle to a value_id.
+ * For op nodes, the value comes from the op's results.
+ * For input nodes, the value comes from the node's data.
+ */
+function resolveSourceValueId(
+  graph: IRGraph,
+  sourceNodeId: string,
+  sourceHandle: string | null | undefined,
+): string | null {
+  // Check if it's an input node (block argument)
+  if (sourceNodeId.startsWith('input_')) {
+    // Input node ID format: "input_{value_id}"
+    return sourceNodeId.replace('input_', '');
+  }
+
+  // Op node: look up the result at the handle index
+  const op = graph.operations.find((o) => o.op_id === sourceNodeId);
+  if (!op) return null;
+  const resultIndex = parseHandleIndex(sourceHandle);
+  if (resultIndex >= 0 && resultIndex < op.results.length) {
+    return op.results[resultIndex].value_id;
+  }
+  return null;
+}
 
 /**
  * GraphView — the main React Flow canvas.
@@ -44,8 +93,22 @@ const nodeTypes: NodeTypes = {
  *   - Single-click node → select it (shows properties in panel)
  *   - Double-click collapsed node → drill in (viewPath changes)
  *   - Click empty area → deselect
+ *   - Right-click node → context menu with "Delete"
+ *   - Delete/Backspace key → delete selected node
+ *   - Drag from handle → connect (add edge)
+ *   - Right-click edge → context menu with "Delete"
  */
-export default function GraphView({ graph, viewPath, onSelectOp, onDrillIn }: GraphViewProps) {
+export default function GraphView({
+  graph,
+  viewPath,
+  onSelectOp,
+  onDrillIn,
+  onDeleteOp,
+  onConnect: onConnectProp,
+  onDeleteEdge,
+  onReconnectEdge,
+  onAddToOutput,
+}: GraphViewProps) {
   // Convert IR graph → React Flow nodes/edges, applying nesting and layout
   const { layoutedNodes, layoutedEdges } = useMemo(() => {
     if (!graph || viewPath.length === 0) {
@@ -59,21 +122,44 @@ export default function GraphView({ graph, viewPath, onSelectOp, onDrillIn }: Gr
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
 
+  // Track currently selected node/edge for keyboard delete
+  const selectedNodeIdRef = useRef<string | null>(null);
+  const selectedEdgeRef = useRef<Edge | null>(null);
+
+  // Context menu state — supports both node and edge menus
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    type: 'node' | 'edge';
+    opId?: string;
+    edge?: Edge;
+  } | null>(null);
+
   // Sync React Flow state when the computed layout changes
-  // (e.g. when viewPath changes after drill-in/out)
   useEffect(() => {
     setNodes(layoutedNodes);
     setEdges(layoutedEdges);
   }, [layoutedNodes, layoutedEdges, setNodes, setEdges]);
 
-  // Single-click → select node and show in property panel
+  // Single-click node → select node, deselect edge
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: { id: string }) => {
       if (!graph) return;
       const op = graph.operations.find((o) => o.op_id === node.id) || null;
+      selectedNodeIdRef.current = node.id;
+      selectedEdgeRef.current = null;
       onSelectOp(op);
     },
     [graph, onSelectOp],
+  );
+
+  // Single-click edge → select edge, deselect node
+  const onEdgeClick = useCallback(
+    (_: React.MouseEvent, edge: Edge) => {
+      selectedEdgeRef.current = edge;
+      selectedNodeIdRef.current = null;
+    },
+    [],
   );
 
   // Double-click → if the node is collapsed (has hidden regions), drill in
@@ -86,10 +172,140 @@ export default function GraphView({ graph, viewPath, onSelectOp, onDrillIn }: Gr
     [onDrillIn],
   );
 
-  // Click empty canvas area → deselect current node
+  // Click empty canvas area → deselect current node and edge
   const onPaneClick = useCallback(() => {
+    selectedNodeIdRef.current = null;
+    selectedEdgeRef.current = null;
+    setContextMenu(null);
     onSelectOp(null);
   }, [onSelectOp]);
+
+  // Right-click node → show context menu
+  const onNodeContextMenu = useCallback(
+    (event: React.MouseEvent, node: { id: string }) => {
+      event.preventDefault();
+      setContextMenu({ x: event.clientX, y: event.clientY, type: 'node', opId: node.id });
+    },
+    [],
+  );
+
+  // Right-click edge → show context menu
+  const onEdgeContextMenu = useCallback(
+    (event: React.MouseEvent, edge: Edge) => {
+      event.preventDefault();
+      setContextMenu({ x: event.clientX, y: event.clientY, type: 'edge', edge });
+    },
+    [],
+  );
+
+  // Handle context menu delete (node)
+  const handleContextDeleteNode = useCallback(() => {
+    if (contextMenu?.type === 'node' && contextMenu.opId && onDeleteOp) {
+      onDeleteOp(contextMenu.opId);
+    }
+    setContextMenu(null);
+  }, [contextMenu, onDeleteOp]);
+
+  // Handle context menu "Add to Output"
+  const handleContextAddToOutput = useCallback((resultIndex: number) => {
+    if (contextMenu?.type === 'node' && contextMenu.opId && onAddToOutput) {
+      onAddToOutput(contextMenu.opId, resultIndex);
+    }
+    setContextMenu(null);
+  }, [contextMenu, onAddToOutput]);
+
+  // Handle context menu delete (edge)
+  const handleContextDeleteEdge = useCallback(() => {
+    if (contextMenu?.type === 'edge' && contextMenu.edge && onDeleteEdge) {
+      const edgeData = contextMenu.edge.data as { toOp: string; toOperandIndex: number } | undefined;
+      if (edgeData) {
+        onDeleteEdge(edgeData.toOp, edgeData.toOperandIndex);
+      }
+    }
+    setContextMenu(null);
+  }, [contextMenu, onDeleteEdge]);
+
+  // Handle new connection (drag from source handle to target handle)
+  const handleConnect = useCallback(
+    (connection: Connection) => {
+      if (!graph || !onConnectProp) return;
+      const { source, sourceHandle, target, targetHandle } = connection;
+      if (!source || !target) return;
+
+      const valueId = resolveSourceValueId(graph, source, sourceHandle);
+      if (!valueId) return;
+
+      const operandIndex = parseHandleIndex(targetHandle);
+      // Pass null for operandIndex to indicate "append" (add new operand)
+      // The target op's current operand count determines if this is
+      // connecting to an existing slot or adding a new one.
+      const targetOp = graph.operations.find((o) => o.op_id === target);
+      if (!targetOp) return;
+
+      if (operandIndex < targetOp.operands.length) {
+        // Connecting to an existing operand slot → replace
+        onConnectProp(target, valueId, operandIndex);
+      } else {
+        // Connecting beyond existing slots → add new operand
+        onConnectProp(target, valueId, null);
+      }
+    },
+    [graph, onConnectProp],
+  );
+
+  // Handle edge reconnection (drag edge endpoint to different source)
+  const handleReconnect = useCallback(
+    (oldEdge: Edge, newConnection: Connection) => {
+      if (!graph || !onReconnectEdge) return;
+      const edgeData = oldEdge.data as { toOp: string; toOperandIndex: number } | undefined;
+      if (!edgeData) return;
+
+      const { source, sourceHandle } = newConnection;
+      if (!source) return;
+
+      const newValueId = resolveSourceValueId(graph, source, sourceHandle);
+      if (!newValueId) return;
+
+      onReconnectEdge(edgeData.toOp, edgeData.toOperandIndex, newValueId);
+    },
+    [graph, onReconnectEdge],
+  );
+
+  // Keyboard: Delete/Backspace → delete selected node or edge
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Don't intercept if user is typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Prioritize edge deletion if an edge is selected
+        if (selectedEdgeRef.current && onDeleteEdge) {
+          const edgeData = selectedEdgeRef.current.data as { toOp: string; toOperandIndex: number } | undefined;
+          if (edgeData) {
+            e.preventDefault();
+            onDeleteEdge(edgeData.toOp, edgeData.toOperandIndex);
+            selectedEdgeRef.current = null;
+            return;
+          }
+        }
+        if (selectedNodeIdRef.current && onDeleteOp) {
+          e.preventDefault();
+          onDeleteOp(selectedNodeIdRef.current);
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onDeleteOp, onDeleteEdge]);
+
+  // Close context menu on click outside
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = () => setContextMenu(null);
+    window.addEventListener('click', handler);
+    return () => window.removeEventListener('click', handler);
+  }, [contextMenu]);
 
   // Empty state — no model loaded yet
   if (!graph) {
@@ -108,22 +324,109 @@ export default function GraphView({ graph, viewPath, onSelectOp, onDrillIn }: Gr
   }
 
   return (
-    <ReactFlow
-      nodes={nodes}
-      edges={edges}
-      onNodesChange={onNodesChange}
-      onEdgesChange={onEdgesChange}
-      onNodeClick={onNodeClick}
-      onNodeDoubleClick={onNodeDoubleClick}
-      onPaneClick={onPaneClick}
-      nodeTypes={nodeTypes}
-      fitView
-      minZoom={0.1}
-      maxZoom={2}
-    >
-      <Background />
-      <Controls />
-      <MiniMap />
-    </ReactFlow>
+    <>
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onNodeClick={onNodeClick}
+        onNodeDoubleClick={onNodeDoubleClick}
+        onNodeContextMenu={onNodeContextMenu}
+        onEdgeClick={onEdgeClick}
+        onEdgeContextMenu={onEdgeContextMenu}
+        onPaneClick={onPaneClick}
+        onConnect={handleConnect}
+        onReconnect={handleReconnect}
+        nodeTypes={nodeTypes}
+        edgesReconnectable
+        fitView
+        minZoom={0.1}
+        maxZoom={2}
+      >
+        <Background />
+        <Controls />
+        <MiniMap />
+      </ReactFlow>
+
+      {/* Context menu — node or edge */}
+      {contextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: contextMenu.x,
+            top: contextMenu.y,
+            background: '#fff',
+            border: '1px solid #d9d9d9',
+            borderRadius: 4,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+            zIndex: 1000,
+            padding: '4px 0',
+          }}
+        >
+          {contextMenu.type === 'node' && (() => {
+            const op = graph?.operations.find((o) => o.op_id === contextMenu.opId);
+            return (
+              <>
+                {onAddToOutput && op && op.results.length > 0 && (
+                  op.results.length === 1 ? (
+                    <div
+                      style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13 }}
+                      onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                      onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                      onClick={() => handleContextAddToOutput(0)}
+                    >
+                      Add to Output
+                    </div>
+                  ) : (
+                    op.results.map((r, i) => (
+                      <div
+                        key={i}
+                        style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13 }}
+                        onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                        onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                        onClick={() => handleContextAddToOutput(i)}
+                      >
+                        Add result #{i} ({r.type}) to Output
+                      </div>
+                    ))
+                  )
+                )}
+                {onDeleteOp && (
+                  <div
+                    style={{
+                      padding: '6px 16px',
+                      cursor: 'pointer',
+                      fontSize: 13,
+                      color: '#e74c3c',
+                    }}
+                    onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                    onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                    onClick={handleContextDeleteNode}
+                  >
+                    Delete Node
+                  </div>
+                )}
+              </>
+            );
+          })()}
+          {contextMenu.type === 'edge' && onDeleteEdge && (
+            <div
+              style={{
+                padding: '6px 16px',
+                cursor: 'pointer',
+                fontSize: 13,
+                color: '#e74c3c',
+              }}
+              onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+              onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+              onClick={handleContextDeleteEdge}
+            >
+              Delete Edge
+            </div>
+          )}
+        </div>
+      )}
+    </>
   );
 }

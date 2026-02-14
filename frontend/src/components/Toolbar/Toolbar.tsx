@@ -1,5 +1,5 @@
 import { Upload, Button, Space, Select } from 'antd';
-import { UploadOutlined, DownloadOutlined } from '@ant-design/icons';
+import { UploadOutlined, DownloadOutlined, PlusOutlined, UndoOutlined, RedoOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 
 /** A top-level function entry for the function selector */
@@ -18,6 +18,12 @@ interface ToolbarProps {
   selectedFuncId: string | null;
   /** Called when user picks a different function from the dropdown */
   onSelectFunction: (funcOpId: string) => void;
+  /** Called when user clicks "Add Op" button */
+  onAddOp?: () => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
 }
 
 export default function Toolbar({
@@ -27,6 +33,11 @@ export default function Toolbar({
   functions,
   selectedFuncId,
   onSelectFunction,
+  onAddOp,
+  onUndo,
+  onRedo,
+  canUndo = false,
+  canRedo = false,
 }: ToolbarProps) {
   const uploadProps: UploadProps = {
     accept: '.mlir',
@@ -57,6 +68,18 @@ export default function Toolbar({
         >
           Save
         </Button>
+        <Button
+          icon={<UndoOutlined />}
+          onClick={onUndo}
+          disabled={!canUndo}
+          title="Undo (Ctrl+Z)"
+        />
+        <Button
+          icon={<RedoOutlined />}
+          onClick={onRedo}
+          disabled={!canRedo}
+          title="Redo (Ctrl+Shift+Z)"
+        />
 
         {/* Function selector — shown when the model has functions */}
         {functions.length > 0 && (
@@ -70,6 +93,15 @@ export default function Toolbar({
               label: f.label,
             }))}
           />
+        )}
+
+        {hasModel && (
+          <Button
+            icon={<PlusOutlined />}
+            onClick={onAddOp}
+          >
+            Add Op
+          </Button>
         )}
       </Space>
     </div>

@@ -46,3 +46,14 @@ export interface IRGraph {
   regions: RegionInfo[];
   edges: EdgeInfo[];
 }
+
+export interface HistoryStatus {
+  can_undo: boolean;
+  can_redo: boolean;
+}
+
+export interface EditResponse {
+  graph: IRGraph;
+  valid: boolean;
+  diagnostics: string[];
+}

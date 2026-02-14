@@ -1,10 +1,14 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { message } from 'antd';
 import Toolbar from './components/Toolbar/Toolbar';
 import Breadcrumb from './components/Toolbar/Breadcrumb';
 import GraphView from './components/Graph/GraphView';
 import PropertyPanel from './components/PropertyPanel/PropertyPanel';
-import { loadModel, saveModel } from './services/api';
+import ValidationBanner from './components/ValidationBanner';
+import OpCreator from './components/OpCreator/OpCreator';
+import { loadModel, saveModel, modifyAttributes, deleteOp, undo as apiUndo, redo as apiRedo, getHistoryStatus, createOp, setOperand, removeOperand, addOperand, addToOutput, type CreateOpRequest } from './services/api';
+import useValidation from './hooks/useValidation';
+import useKeyboardShortcuts from './hooks/useKeyboardShortcuts';
 import type { IRGraph, OperationInfo } from './types/ir';
 
 /**
@@ -32,6 +36,17 @@ function getFuncLabel(op: OperationInfo): string {
 function App() {
   const [graph, setGraph] = useState<IRGraph | null>(null);
   const [selectedOp, setSelectedOp] = useState<OperationInfo | null>(null);
+  const [validationStatus, setValidationStatus] = useState<{ valid: boolean; diagnostics: string[] }>({ valid: true, diagnostics: [] });
+  const [showOpCreator, setShowOpCreator] = useState(false);
+  const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false });
+
+  // Real-time validation via WebSocket — merge into local state
+  const wsValidation = useValidation();
+  useEffect(() => {
+    if (wsValidation.connected) {
+      setValidationStatus({ valid: wsValidation.valid, diagnostics: wsValidation.diagnostics });
+    }
+  }, [wsValidation.valid, wsValidation.diagnostics, wsValidation.connected]);
 
   /**
    * viewPath tracks the current drill-in location in the IR tree.
@@ -97,6 +112,7 @@ function App() {
       const result = await loadModel(file);
       setGraph(result);
       setSelectedOp(null);
+      setValidationStatus({ valid: true, diagnostics: [] });
 
       const funcs = getTopLevelFunctions(result);
       if (funcs.length === 1) {
@@ -113,6 +129,122 @@ function App() {
       message.error(`Failed to load: ${detail}`);
     }
   }, []);
+
+  // ── Refresh history status after mutations ──
+  const refreshHistory = useCallback(async () => {
+    try {
+      const status = await getHistoryStatus();
+      setHistoryStatus({ canUndo: status.can_undo, canRedo: status.can_redo });
+    } catch {
+      // Ignore — history status is non-critical
+    }
+  }, []);
+
+  // ── Helper: apply an EditResponse (graph + validation) ──
+  const applyEditResponse = useCallback((resp: { graph: IRGraph; valid: boolean; diagnostics: string[] }) => {
+    setGraph(resp.graph);
+    setSelectedOp(null);
+    setValidationStatus({ valid: resp.valid, diagnostics: resp.diagnostics });
+    refreshHistory();
+  }, [refreshHistory]);
+
+  // ── Attribute editing ──
+  const handleAttributeEdit = useCallback(async (
+    opId: string,
+    updates: Record<string, string>,
+    deletes: string[],
+  ) => {
+    const resp = await modifyAttributes(opId, updates, deletes);
+    applyEditResponse(resp);
+  }, [applyEditResponse]);
+
+  // ── Op deletion ──
+  const handleDeleteOp = useCallback(async (opId: string) => {
+    try {
+      const resp = await deleteOp(opId);
+      applyEditResponse(resp);
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      message.error(`Failed to delete: ${detail}`);
+    }
+  }, [applyEditResponse]);
+
+  // ── Undo (used by validation banner quick-action) ──
+  const handleUndo = useCallback(async () => {
+    try {
+      const resp = await apiUndo();
+      applyEditResponse(resp);
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      message.error(`Undo failed: ${detail}`);
+    }
+  }, [applyEditResponse]);
+
+  // ── Redo ──
+  const handleRedo = useCallback(async () => {
+    try {
+      const resp = await apiRedo();
+      applyEditResponse(resp);
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      message.error(`Redo failed: ${detail}`);
+    }
+  }, [applyEditResponse]);
+
+  // ── Op creation ──
+  const handleCreateOp = useCallback(async (request: CreateOpRequest) => {
+    const resp = await createOp(request);
+    applyEditResponse(resp);
+  }, [applyEditResponse]);
+
+  // ── Edge editing: connect / delete / reconnect ──
+  const handleConnect = useCallback(async (targetOpId: string, sourceValueId: string, operandIndex: number | null) => {
+    try {
+      let resp;
+      if (operandIndex !== null) {
+        // Replace existing operand at index
+        resp = await setOperand(targetOpId, operandIndex, sourceValueId);
+      } else {
+        // Add new operand
+        resp = await addOperand(targetOpId, sourceValueId);
+      }
+      applyEditResponse(resp);
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      message.error(`Failed to connect: ${detail}`);
+    }
+  }, [applyEditResponse]);
+
+  const handleDeleteEdge = useCallback(async (targetOpId: string, operandIndex: number) => {
+    try {
+      const resp = await removeOperand(targetOpId, operandIndex);
+      applyEditResponse(resp);
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      message.error(`Failed to delete edge: ${detail}`);
+    }
+  }, [applyEditResponse]);
+
+  // ── Add to output: add op result to function return ──
+  const handleAddToOutput = useCallback(async (opId: string, resultIndex: number) => {
+    try {
+      const resp = await addToOutput(opId, resultIndex);
+      applyEditResponse(resp);
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      message.error(`Failed to add to output: ${detail}`);
+    }
+  }, [applyEditResponse]);
+
+  const handleReconnectEdge = useCallback(async (targetOpId: string, operandIndex: number, newValueId: string) => {
+    try {
+      const resp = await setOperand(targetOpId, operandIndex, newValueId);
+      applyEditResponse(resp);
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      message.error(`Failed to reconnect edge: ${detail}`);
+    }
+  }, [applyEditResponse]);
 
   // ── Save: download current module as .mlir file ──
   const handleSave = useCallback(async () => {
@@ -132,6 +264,9 @@ function App() {
     }
   }, []);
 
+  // ── Keyboard shortcuts ──
+  useKeyboardShortcuts({ onUndo: handleUndo, onRedo: handleRedo });
+
   // Build function options for the toolbar selector
   const functionOptions = useMemo(() => {
     return functions.map((f) => ({
@@ -149,18 +284,42 @@ function App() {
         functions={functionOptions}
         selectedFuncId={selectedFuncId}
         onSelectFunction={handleSelectFunction}
+        onAddOp={() => setShowOpCreator(true)}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
+        canUndo={historyStatus.canUndo}
+        canRedo={historyStatus.canRedo}
       />
       {/* Breadcrumb bar — only shows when drilled deeper than the function level */}
       <Breadcrumb items={breadcrumbs} onNavigate={handleBreadcrumbNavigate} />
+      <ValidationBanner
+        valid={validationStatus.valid}
+        diagnostics={validationStatus.diagnostics}
+        onUndo={handleUndo}
+      />
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <GraphView
           graph={graph}
           viewPath={viewPath}
           onSelectOp={setSelectedOp}
           onDrillIn={handleDrillIn}
+          onDeleteOp={handleDeleteOp}
+          onConnect={handleConnect}
+          onDeleteEdge={handleDeleteEdge}
+          onReconnectEdge={handleReconnectEdge}
+          onAddToOutput={handleAddToOutput}
         />
-        <PropertyPanel selectedOp={selectedOp} />
+        <PropertyPanel selectedOp={selectedOp} onAttributeEdit={handleAttributeEdit} onRemoveOperand={handleDeleteEdge} />
       </div>
+      {graph && (
+        <OpCreator
+          visible={showOpCreator}
+          onClose={() => setShowOpCreator(false)}
+          onCreateOp={handleCreateOp}
+          graph={graph}
+          viewPath={viewPath}
+        />
+      )}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import type {
   RegionInfo,
 } from '../../types/ir';
 import type { OpNodeData } from './OpNode';
+import type { InputNodeData } from './InputNode';
 
 /**
  * Default maximum nesting depth for inline expansion.
@@ -43,7 +44,17 @@ function buildLookups(graph: IRGraph) {
     });
   }
 
-  return { opMap, blockMap, regionMap, valueProducerMap };
+  // value_id -> block argument source node ID
+  // Used to create edges from input nodes to consumer ops
+  const blockArgNodeMap = new Map<string, string>();
+  for (const block of graph.blocks) {
+    block.arguments.forEach((arg) => {
+      // Node ID for this block arg: "input_{value_id}"
+      blockArgNodeMap.set(arg.value_id, `input_${arg.value_id}`);
+    });
+  }
+
+  return { opMap, blockMap, regionMap, valueProducerMap, blockArgNodeMap };
 }
 
 // ─── View root resolution ──────────────────────────────────────────
@@ -109,8 +120,9 @@ function walkRegions(
   lookups: ReturnType<typeof buildLookups>,
   nodes: Node[],
   visibleOpIds: Set<string>,
+  visibleInputNodeIds: Set<string>,
 ): void {
-  const { opMap, blockMap, regionMap } = lookups;
+  const { opMap, blockMap, regionMap, blockArgNodeMap } = lookups;
 
   for (const regionId of regionIds) {
     const region = regionMap.get(regionId);
@@ -119,6 +131,26 @@ function walkRegions(
     for (const blockId of region.blocks) {
       const block = blockMap.get(blockId);
       if (!block) continue;
+
+      // Create input nodes for block arguments
+      for (const arg of block.arguments) {
+        const nodeId = blockArgNodeMap.get(arg.value_id);
+        if (!nodeId) continue;
+
+        const nodeData: InputNodeData = {
+          label: arg.value_id,
+          type: arg.type,
+          valueId: arg.value_id,
+        };
+
+        nodes.push({
+          id: nodeId,
+          type: 'inputNode',
+          data: nodeData,
+          position: { x: 0, y: 0 },
+        });
+        visibleInputNodeIds.add(nodeId);
+      }
 
       for (const opId of block.operations) {
         const op = opMap.get(opId);
@@ -155,6 +187,7 @@ function walkRegions(
             lookups,
             nodes,
             visibleOpIds,
+            visibleInputNodeIds,
           );
         } else if (hasRegions && depth > maxExpandDepth) {
           // ── Collapsed op (depth exceeds threshold) ──
@@ -206,21 +239,19 @@ function walkRegions(
 // ─── Edge generation ───────────────────────────────────────────────
 
 /**
- * Generate data-flow edges, but only between VISIBLE ops.
+ * Generate data-flow edges between visible nodes.
  *
- * For each visible op, iterate its operands. If the operand's producing op
- * is also visible, create an edge. This automatically excludes edges that
- * lead into or out of collapsed regions.
- *
- * Block argument operands (which have no producing op) are silently skipped —
- * they don't appear in the valueProducerMap.
+ * For each visible op, iterate its operands:
+ *   - If the operand is produced by another visible op → edge from that op
+ *   - If the operand is a block argument with a visible input node → edge from input node
  */
 function generateEdges(
   visibleOpIds: Set<string>,
+  visibleInputNodeIds: Set<string>,
   lookups: ReturnType<typeof buildLookups>,
 ): Edge[] {
   const edges: Edge[] = [];
-  const { opMap, valueProducerMap } = lookups;
+  const { opMap, valueProducerMap, blockArgNodeMap } = lookups;
 
   for (const opId of visibleOpIds) {
     const op = opMap.get(opId);
@@ -228,17 +259,37 @@ function generateEdges(
 
     op.operands.forEach((operand, operandIdx) => {
       const producer = valueProducerMap.get(operand.value_id);
-      // Only create edge if the producing op is also visible in the current view
       if (producer && visibleOpIds.has(producer.opId)) {
+        // Edge from a producing op's result
         edges.push({
           id: `edge-${operand.value_id}-${op.op_id}-${operandIdx}`,
           source: producer.opId,
           sourceHandle: `out-${producer.resultIndex}`,
           target: op.op_id,
           targetHandle: `in-${operandIdx}`,
-          label: operand.type,                         // SSA type annotation on the edge
+          label: operand.type,
           style: { stroke: '#888' },
           labelStyle: { fontSize: 10, fill: '#aaa' },
+          deletable: true,
+          data: { valueId: operand.value_id, toOp: op.op_id, toOperandIndex: operandIdx },
+        });
+        return;
+      }
+
+      // Check if the operand comes from a block argument input node
+      const inputNodeId = blockArgNodeMap.get(operand.value_id);
+      if (inputNodeId && visibleInputNodeIds.has(inputNodeId)) {
+        edges.push({
+          id: `edge-${operand.value_id}-${op.op_id}-${operandIdx}`,
+          source: inputNodeId,
+          sourceHandle: 'out-0',
+          target: op.op_id,
+          targetHandle: `in-${operandIdx}`,
+          label: operand.type,
+          style: { stroke: '#1890ff' },
+          labelStyle: { fontSize: 10, fill: '#91d5ff' },
+          deletable: true,
+          data: { valueId: operand.value_id, toOp: op.op_id, toOperandIndex: operandIdx },
         });
       }
     });
@@ -286,12 +337,13 @@ export function irToFlow(
 
   const nodes: Node[] = [];
   const visibleOpIds = new Set<string>();
+  const visibleInputNodeIds = new Set<string>();
 
   // Recursively generate nodes, starting at depth=1
-  walkRegions(regionIds, 1, maxExpandDepth, lookups, nodes, visibleOpIds);
+  walkRegions(regionIds, 1, maxExpandDepth, lookups, nodes, visibleOpIds, visibleInputNodeIds);
 
-  // Generate edges only between visible ops
-  const edges = generateEdges(visibleOpIds, lookups);
+  // Generate edges between visible ops and input nodes
+  const edges = generateEdges(visibleOpIds, visibleInputNodeIds, lookups);
 
   return { nodes, edges };
 }

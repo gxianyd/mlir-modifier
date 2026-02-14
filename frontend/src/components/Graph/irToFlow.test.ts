@@ -250,7 +250,11 @@ describe('irToFlow — function body view', () => {
     expect(nodeIds.has('op_addf')).toBe(true);
     expect(nodeIds.has('op_mulf')).toBe(true);
     expect(nodeIds.has('op_return')).toBe(true);
-    expect(nodes.length).toBe(3);
+    // 3 ops + 3 block argument input nodes
+    const opNodes = nodes.filter((n) => n.type === 'opNode');
+    const inputNodes = nodes.filter((n) => n.type === 'inputNode');
+    expect(opNodes.length).toBe(3);
+    expect(inputNodes.length).toBe(3);
   });
 
   it('should create edges between ops connected by SSA values', () => {
@@ -283,11 +287,15 @@ describe('irToFlow — function body view', () => {
     expect(addfNode?.data.attributes).toHaveProperty('fastmath');
   });
 
-  it('should render all nodes as opNode type', () => {
+  it('should render op nodes as opNode type and block args as inputNode type', () => {
     const { nodes } = irToFlow(SIMPLE_GRAPH, viewPath);
     for (const node of nodes) {
-      expect(node.type).toBe('opNode');
+      expect(['opNode', 'inputNode']).toContain(node.type);
     }
+    const opNodes = nodes.filter((n) => n.type === 'opNode');
+    const inputNodes = nodes.filter((n) => n.type === 'inputNode');
+    expect(opNodes.length).toBeGreaterThan(0);
+    expect(inputNodes.length).toBeGreaterThan(0);
   });
 
   it('should include type labels on edges', () => {

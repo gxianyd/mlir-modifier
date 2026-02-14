@@ -13,3 +13,13 @@ body {
 #root {
   height: 100vh;
 }
+
+/* Selected edge styling */
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #f5222d !important;
+  stroke-width: 2.5 !important;
+}
+
+.react-flow__edge.selected .react-flow__edge-text {
+  fill: #f5222d !important;
+}
