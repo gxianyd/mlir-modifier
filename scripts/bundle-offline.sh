@@ -3,9 +3,10 @@
 #
 # 用法:
 #   ./scripts/bundle-offline.sh [--node <path>] [--npm-registry <url>] [--with-mlir]
+#                               [--with-local-mlir <path>]
 #
 # 生成:
-#   offline-bundle.tar.gz  (包含 Python wheels + node_modules)
+#   offline-bundle.tar.gz  (包含 Python wheels + node_modules [+ MLIR binding])
 #
 # 在目标机器上使用:
 #   ./setup.sh --skip-llvm --offline ./offline-bundle.tar.gz
@@ -22,13 +23,15 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 NODE_BIN=""
 NPM_REGISTRY=""
 WITH_MLIR=false
+LOCAL_MLIR=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --node)         NODE_BIN="$2";        shift 2 ;;
-        --npm-registry) NPM_REGISTRY="$2";    shift 2 ;;
-        --with-mlir)    WITH_MLIR=true;        shift ;;
-        -h|--help) sed -n '3,9p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        --node)             NODE_BIN="$2";        shift 2 ;;
+        --npm-registry)     NPM_REGISTRY="$2";    shift 2 ;;
+        --with-mlir)        WITH_MLIR=true;        shift ;;
+        --with-local-mlir)  LOCAL_MLIR="$(realpath "$2")"; shift 2 ;;
+        -h|--help) sed -n '3,10p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) error "未知参数: $1" ;;
     esac
 done
@@ -98,6 +101,15 @@ if [[ "$WITH_MLIR" == true ]]; then
     ok "mlir-python-bindings wheel 已下载"
 fi
 
+# ── Step 1c: 本地编译 MLIR binding（可选） ────────────────────
+if [[ -n "$LOCAL_MLIR" ]]; then
+    [[ -d "$LOCAL_MLIR" ]] || error "本地 MLIR binding 目录不存在: ${LOCAL_MLIR}"
+    [[ -d "$LOCAL_MLIR/mlir" ]] || error "目录结构不正确，未找到 ${LOCAL_MLIR}/mlir/"
+    info "Step 1c: 打包本地 MLIR binding: ${LOCAL_MLIR}"
+    tar -czf "${BUNDLE_DIR}/mlir_core.tar.gz" -C "$LOCAL_MLIR" .
+    ok "本地 MLIR binding 已打包: $(du -sh "${BUNDLE_DIR}/mlir_core.tar.gz" | cut -f1)"
+fi
+
 # ── Step 2: node_modules ─────────────────────────────────────
 info "Step 2: 准备 node_modules..."
 FRONTEND_DIR="${PROJECT_ROOT}/frontend"
@@ -121,6 +133,7 @@ info = {
     'python_version': sys.version,
     'platform': platform.platform(),
     'arch': platform.machine(),
+    'local_mlir': $(if [[ -n "$LOCAL_MLIR" ]]; then echo "True"; else echo "False"; fi),
 }
 with open('${BUNDLE_DIR}/bundle-info.json', 'w') as f:
     json.dump(info, f, indent=2)

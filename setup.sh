@@ -237,21 +237,30 @@ else
     info "[2/4] 跳过 LLVM（--skip-llvm）"
     info "[3/4] 跳过编译（--skip-llvm）"
     if [[ ! -d "$MLIR_BINDING" ]]; then
-        info "未找到自编译 MLIR binding，尝试安装 mlir-python-bindings..."
-        _mlir_index="https://github.com/makslevental/mlir-wheels/releases/expanded_assets/latest"
-        if [[ -n "$OFFLINE_DIR" ]] && ls "${OFFLINE_DIR}/wheels/mlir"* 2>/dev/null | grep -q .; then
-            info "从离线包安装 mlir-python-bindings..."
-            pip install --quiet --no-index --find-links="${OFFLINE_DIR}/wheels" mlir-python-bindings
+        # 优先使用 bundle 中的本地编译 MLIR binding
+        if [[ -n "$OFFLINE_DIR" && -f "${OFFLINE_DIR}/mlir_core.tar.gz" ]]; then
+            info "从离线包解压本地 MLIR binding..."
+            MLIR_BINDING="${BACKEND_DIR}/.mlir_core"
+            rm -rf "$MLIR_BINDING" && mkdir -p "$MLIR_BINDING"
+            tar -xzf "${OFFLINE_DIR}/mlir_core.tar.gz" -C "$MLIR_BINDING"
+            ok "本地 MLIR binding 已解压: ${MLIR_BINDING}"
         else
-            info "从 mlir-wheels 安装 mlir-python-bindings..."
-            pip install --quiet -f "$_mlir_index" mlir-python-bindings
-        fi
-        _pip_mlir=$("$VENV_PYTHON" -c "import mlir, os; print(os.path.dirname(mlir.__file__))" 2>/dev/null || true)
-        if [[ -n "$_pip_mlir" ]]; then
-            MLIR_BINDING="$_pip_mlir"
-            ok "mlir-python-bindings 已安装: ${MLIR_BINDING}"
-        else
-            error "MLIR binding 安装失败，请手动指定 --llvm-dir 或安装 mlir-python-bindings"
+            info "未找到自编译 MLIR binding，尝试安装 mlir-python-bindings..."
+            _mlir_index="https://github.com/makslevental/mlir-wheels/releases/expanded_assets/latest"
+            if [[ -n "$OFFLINE_DIR" ]] && ls "${OFFLINE_DIR}/wheels/mlir"* 2>/dev/null | grep -q .; then
+                info "从离线包安装 mlir-python-bindings..."
+                pip install --quiet --no-index --find-links="${OFFLINE_DIR}/wheels" mlir-python-bindings
+            else
+                info "从 mlir-wheels 安装 mlir-python-bindings..."
+                pip install --quiet -f "$_mlir_index" mlir-python-bindings
+            fi
+            _pip_mlir=$("$VENV_PYTHON" -c "import mlir, os; print(os.path.dirname(mlir.__file__))" 2>/dev/null || true)
+            if [[ -n "$_pip_mlir" ]]; then
+                MLIR_BINDING="$_pip_mlir"
+                ok "mlir-python-bindings 已安装: ${MLIR_BINDING}"
+            else
+                error "MLIR binding 安装失败，请手动指定 --llvm-dir 或安装 mlir-python-bindings"
+            fi
         fi
     fi
 fi
