@@ -720,10 +720,18 @@ class IRManager:
                             )
                         )
 
-                    # Build attributes
+                    # Build attributes.
+                    # OpAttributeMap iteration behaviour differs by MLIR build:
+                    #   - Older pybind11 builds: yields str keys (index into map to get value)
+                    #   - Newer nanobind builds: yields NamedAttribute objects (.name / .attr)
                     attrs: dict[str, AttributeInfo] = {}
-                    for attr_name in child_op.attributes:
-                        attr_val = child_op.attributes[attr_name]
+                    for item in child_op.attributes:
+                        if isinstance(item, str):
+                            attr_name = item
+                            attr_val = child_op.attributes[attr_name]
+                        else:
+                            attr_name = item.name
+                            attr_val = item.attr
                         attrs[attr_name] = AttributeInfo(
                             type=type(attr_val).__name__,
                             value=str(attr_val),
@@ -768,24 +776,16 @@ class IRManager:
     def _resolve_value(self, value: ir.Value) -> str:
         """Resolve an operand value to its registered value_id.
 
-        Uses == comparison on MLIR objects (which compares underlying C++ pointers).
+        Scans _value_map directly using Value == comparison (C++ pointer equality).
+        This is more reliable than comparing owner Operation/Block objects, which
+        can fail for custom/unregistered dialect ops.
         """
-        if isinstance(value, ir.OpResult):
-            owner_op = value.owner
-            result_num = value.result_number
-            for oid, op in self._op_map.items():
-                if op == owner_op:
-                    key = (oid, result_num)
-                    if key in self._result_value_ids:
-                        return self._result_value_ids[key]
-        elif isinstance(value, ir.BlockArgument):
-            owner_block = value.owner
-            arg_num = value.arg_number
-            for bid, block in self._block_map.items():
-                if block == owner_block:
-                    key = (bid, arg_num)
-                    if key in self._block_arg_value_ids:
-                        return self._block_arg_value_ids[key]
+        for vid, stored_val in self._value_map.items():
+            try:
+                if stored_val == value:
+                    return vid
+            except Exception:
+                continue
 
         # Fallback: register as new (shouldn't normally happen)
         vid = self._gen_id("val")
