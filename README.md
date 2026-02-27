@@ -102,6 +102,10 @@ For detailed instructions see [docs/setup-guide.md](docs/setup-guide.md).
 
 For air-gapped clusters:
 
+> **Pre-built bundles** for Linux x86_64 (Python 3.10 / 3.11 / 3.12) are attached to each
+> [GitHub Release](https://github.com/gxianyd/mlir-modifier/releases).
+> Download the one matching your Python version and skip Step 1.
+
 ```bash
 # Step 1: On a machine with internet access — build the dependency bundle
 ./scripts/bundle-offline.sh

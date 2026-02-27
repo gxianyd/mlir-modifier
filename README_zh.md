@@ -98,6 +98,10 @@ cd mlir-modifier
 
 适用于无网络访问的集群环境：
 
+> **预构建 bundle**：每个 [GitHub Release](https://github.com/gxianyd/mlir-modifier/releases)
+> 附带 Linux x86_64 平台的 bundle 文件（Python 3.10 / 3.11 / 3.12），
+> 下载与你的 Python 版本匹配的文件，可跳过 Step 1。
+
 ```bash
 # Step 1：在有网络的机器上打包依赖
 ./scripts/bundle-offline.sh
