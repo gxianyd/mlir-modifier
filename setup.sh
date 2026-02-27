@@ -236,7 +236,24 @@ except Exception:
 else
     info "[2/4] 跳过 LLVM（--skip-llvm）"
     info "[3/4] 跳过编译（--skip-llvm）"
-    [[ -d "$MLIR_BINDING" ]] || error "MLIR binding 不存在: ${MLIR_BINDING}"
+    if [[ ! -d "$MLIR_BINDING" ]]; then
+        info "未找到自编译 MLIR binding，尝试安装 mlir-python-bindings..."
+        _mlir_index="https://github.com/makslevental/mlir-wheels/releases/expanded_assets/latest"
+        if [[ -n "$OFFLINE_DIR" ]] && ls "${OFFLINE_DIR}/wheels/mlir"* 2>/dev/null | grep -q .; then
+            info "从离线包安装 mlir-python-bindings..."
+            pip install --quiet --no-index --find-links="${OFFLINE_DIR}/wheels" mlir-python-bindings
+        else
+            info "从 mlir-wheels 安装 mlir-python-bindings..."
+            pip install --quiet -f "$_mlir_index" mlir-python-bindings
+        fi
+        _pip_mlir=$("$VENV_PYTHON" -c "import mlir, os; print(os.path.dirname(mlir.__file__))" 2>/dev/null || true)
+        if [[ -n "$_pip_mlir" ]]; then
+            MLIR_BINDING="$_pip_mlir"
+            ok "mlir-python-bindings 已安装: ${MLIR_BINDING}"
+        else
+            error "MLIR binding 安装失败，请手动指定 --llvm-dir 或安装 mlir-python-bindings"
+        fi
+    fi
 fi
 
 # ── Step 4a: 后端 ────────────────────────────────────────────
@@ -251,7 +268,9 @@ if [[ "$SKIP_BACKEND" == false ]]; then
     fi
 
     # 将 MLIR binding 路径写入 activate（幂等）
-    if ! grep -qF "$MLIR_BINDING" "${VENV_DIR}/bin/activate" 2>/dev/null; then
+    # 若 mlir 已 pip 安装进 venv site-packages，无需额外设置 PYTHONPATH
+    if [[ "$MLIR_BINDING" != "${VENV_DIR}"* ]] && \
+       ! grep -qF "$MLIR_BINDING" "${VENV_DIR}/bin/activate" 2>/dev/null; then
         printf '\n# MLIR binding (setup.sh)\nexport PYTHONPATH=%s:$PYTHONPATH\n' \
             "$MLIR_BINDING" >> "${VENV_DIR}/bin/activate"
     fi
@@ -265,8 +284,11 @@ if [[ "$SKIP_BACKEND" == false ]]; then
         info "LD_LIBRARY_PATH 已写入 activate"
     fi
 
-    # 验证
-    PYTHONPATH="$MLIR_BINDING" "${VENV_PYTHON}" -c "
+    # 验证（MLIR_BINDING 可能是自编译路径，也可能已在 venv site-packages 中）
+    _verify_pythonpath=""
+    [[ "$MLIR_BINDING" != "${VENV_DIR}"* ]] && _verify_pythonpath="$MLIR_BINDING"
+    PYTHONPATH="${_verify_pythonpath}${_verify_pythonpath:+:}${PYTHONPATH:-}" \
+    "${VENV_PYTHON}" -c "
 import mlir.ir as ir
 ctx = ir.Context()
 ctx.allow_unregistered_dialects = True
@@ -353,5 +375,9 @@ echo "=== 配置完成 ==="
 echo ""
 echo "启动后端:  ./start-backend.sh"
 echo "启动前端:  ./start-frontend.sh"
-echo "运行测试:  cd backend && PYTHONPATH=${MLIR_BINDING}:. .venv/bin/python3 -m pytest tests/ -v"
+if [[ "$MLIR_BINDING" != "${VENV_DIR}"* ]]; then
+    echo "运行测试:  cd backend && PYTHONPATH=${MLIR_BINDING}:. .venv/bin/python3 -m pytest tests/ -v"
+else
+    echo "运行测试:  cd backend && .venv/bin/python3 -m pytest tests/ -v"
+fi
 echo ""

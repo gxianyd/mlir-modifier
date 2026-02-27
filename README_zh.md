@@ -48,20 +48,21 @@ cd mlir-modifier
 ### 2. 一键配置
 
 ```bash
+# 最快路径——通过 mlir-wheels 安装预编译 mlir-python-bindings（无需编译 LLVM）
+./setup.sh --skip-llvm
+
 # 完整配置——克隆 llvm-project 并编译 MLIR Python binding（约 30–60 分钟）
 ./setup.sh
 
-# 如果 ../llvm-project 已编译好，跳过 LLVM 步骤：
-./setup.sh --skip-llvm
-
-# 指定 LLVM 路径：
+# 指定自定义 LLVM 路径：
 ./setup.sh --skip-llvm --llvm-dir /path/to/llvm-project
 ```
 
 脚本会完成以下步骤：
 - 创建 Python venv 并安装后端依赖
+- 使用 `--skip-llvm` 时若无本地编译产物，自动从 [mlir-wheels](https://github.com/makslevental/mlir-wheels) 安装 `mlir-python-bindings`
 - 通过 npm 安装前端依赖
-- 将 MLIR binding 路径写入 venv `activate`
+- 将 MLIR binding 路径写入 venv `activate`（pip 安装时自动跳过）
 - 生成 `start-backend.sh` 和 `start-frontend.sh`
 
 ### 3. 启动

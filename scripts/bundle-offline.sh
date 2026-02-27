@@ -2,7 +2,7 @@
 # 打包离线依赖包——在有网络的机器上运行，生成 offline-bundle.tar.gz
 #
 # 用法:
-#   ./scripts/bundle-offline.sh [--node <path>] [--npm-registry <url>]
+#   ./scripts/bundle-offline.sh [--node <path>] [--npm-registry <url>] [--with-mlir]
 #
 # 生成:
 #   offline-bundle.tar.gz  (包含 Python wheels + node_modules)
@@ -21,12 +21,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 NODE_BIN=""
 NPM_REGISTRY=""
+WITH_MLIR=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --node)         NODE_BIN="$2";        shift 2 ;;
         --npm-registry) NPM_REGISTRY="$2";    shift 2 ;;
-        -h|--help) sed -n '3,8p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        --with-mlir)    WITH_MLIR=true;        shift ;;
+        -h|--help) sed -n '3,9p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) error "未知参数: $1" ;;
     esac
 done
@@ -79,6 +81,22 @@ fi
     anyio
 
 ok "Python wheels 已下载到 ${BUNDLE_DIR}/wheels/"
+
+# ── Step 1b: mlir-python-bindings（可选） ─────────────────────
+if [[ "$WITH_MLIR" == true ]]; then
+    info "Step 1b: 下载 mlir-python-bindings wheel..."
+    _mlir_index="https://github.com/makslevental/mlir-wheels/releases/expanded_assets/latest"
+    "$PIP" download \
+        --dest "${BUNDLE_DIR}/wheels" \
+        --find-links "$_mlir_index" \
+        --no-index \
+        mlir-python-bindings 2>/dev/null || \
+    "$PIP" download \
+        --dest "${BUNDLE_DIR}/wheels" \
+        -f "$_mlir_index" \
+        mlir-python-bindings
+    ok "mlir-python-bindings wheel 已下载"
+fi
 
 # ── Step 2: node_modules ─────────────────────────────────────
 info "Step 2: 准备 node_modules..."

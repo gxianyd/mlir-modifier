@@ -52,20 +52,22 @@ cd mlir-modifier
 ### 2. Set up
 
 ```bash
+# Fastest path — uses pre-built mlir-python-bindings from mlir-wheels (no LLVM compile)
+./setup.sh --skip-llvm
+
 # Full setup — clones llvm-project and builds MLIR Python bindings (~30–60 min)
 ./setup.sh
 
-# If LLVM/MLIR is already built at ../llvm-project:
-./setup.sh --skip-llvm
-
-# Custom LLVM path:
+# If LLVM/MLIR is already built at a custom path:
 ./setup.sh --skip-llvm --llvm-dir /path/to/llvm-project
 ```
 
 The script:
 - Creates a Python venv with all backend dependencies
+- Installs `mlir-python-bindings` from [mlir-wheels](https://github.com/makslevental/mlir-wheels)
+  when `--skip-llvm` is used and no local MLIR build is found
 - Installs frontend packages via npm
-- Bakes the MLIR binding path into the venv `activate` script
+- Bakes the MLIR binding path into the venv `activate` script (skipped when mlir is pip-installed)
 - Generates `start-backend.sh` and `start-frontend.sh`
 
 ### 3. Start
