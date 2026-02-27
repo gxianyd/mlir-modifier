@@ -16,6 +16,7 @@
 #   --skip-llvm           跳过 LLVM 克隆与编译
 #   --skip-backend        跳过后端依赖安装
 #   --skip-frontend       跳过前端依赖安装
+#   --offline    <path>   使用离线依赖包（由 scripts/bundle-offline.sh 生成）
 #   -h, --help            显示帮助
 
 set -eo pipefail
@@ -40,6 +41,7 @@ NPM_REGISTRY=""
 SKIP_LLVM=false
 SKIP_BACKEND=false
 SKIP_FRONTEND=false
+OFFLINE_BUNDLE=""
 
 # ── 参数解析 ─────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -56,7 +58,8 @@ while [[ $# -gt 0 ]]; do
         --skip-llvm)     SKIP_LLVM=true;        shift ;;
         --skip-backend)  SKIP_BACKEND=true;     shift ;;
         --skip-frontend) SKIP_FRONTEND=true;    shift ;;
-        -h|--help) sed -n '3,17p' "$0" | sed 's/^# \?//'; exit 0 ;;
+        --offline)       OFFLINE_BUNDLE="$(realpath "$2")"; shift 2 ;;
+        -h|--help) sed -n '3,18p' "$0" | sed 's/^# \?//'; exit 0 ;;
         *) error "未知参数: $1（使用 --help 查看帮助）" ;;
     esac
 done
@@ -66,6 +69,25 @@ FRONTEND_DIR="${SCRIPT_DIR}/frontend"
 VENV_DIR="${BACKEND_DIR}/.venv"
 VENV_PYTHON="${VENV_DIR}/bin/python3"
 MLIR_BINDING="${LLVM_DIR}/build/tools/mlir/python_packages/mlir_core"
+
+# ── 离线包解压 ───────────────────────────────────────────────
+# 若提供了 --offline，将 bundle 解压到临时目录并设置 OFFLINE_DIR
+OFFLINE_DIR=""
+if [[ -n "$OFFLINE_BUNDLE" ]]; then
+    [[ -e "$OFFLINE_BUNDLE" ]] || error "离线包不存在: ${OFFLINE_BUNDLE}"
+    OFFLINE_DIR="${SCRIPT_DIR}/.offline-bundle-extracted"
+    rm -rf "$OFFLINE_DIR" && mkdir -p "$OFFLINE_DIR"
+    if [[ -f "$OFFLINE_BUNDLE" && "$OFFLINE_BUNDLE" == *.tar.gz ]]; then
+        tar -xzf "$OFFLINE_BUNDLE" -C "$OFFLINE_DIR" --strip-components=1
+    elif [[ -d "$OFFLINE_BUNDLE" ]]; then
+        cp -r "$OFFLINE_BUNDLE/." "$OFFLINE_DIR/"
+    else
+        error "离线包格式不支持（需要 .tar.gz 或目录）: ${OFFLINE_BUNDLE}"
+    fi
+    info "离线包已解压: ${OFFLINE_DIR}"
+    [[ -f "${OFFLINE_DIR}/bundle-info.json" ]] && \
+        info "bundle 信息: $(cat "${OFFLINE_DIR}/bundle-info.json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("platform","?"))')"
+fi
 
 echo ""
 echo "=== MLIR Modifier 一键配置 ==="
@@ -136,7 +158,11 @@ info "[1/4] 配置 Python 虚拟环境..."
 
 [[ -d "$VENV_DIR" ]] || python3 -m venv "$VENV_DIR"
 source "${VENV_DIR}/bin/activate"
-pip install --quiet nanobind numpy pybind11
+if [[ -n "$OFFLINE_DIR" && -d "${OFFLINE_DIR}/wheels" ]]; then
+    pip install --quiet --no-index --find-links="${OFFLINE_DIR}/wheels" nanobind numpy pybind11
+else
+    pip install --quiet nanobind numpy pybind11
+fi
 
 ok "虚拟环境就绪: ${VENV_DIR}"
 
@@ -217,7 +243,12 @@ fi
 if [[ "$SKIP_BACKEND" == false ]]; then
     info "[4/4] 配置后端..."
     source "${VENV_DIR}/bin/activate"
-    pip install --quiet fastapi "uvicorn[standard]" python-multipart pydantic pyyaml pytest httpx
+    if [[ -n "$OFFLINE_DIR" && -d "${OFFLINE_DIR}/wheels" ]]; then
+        pip install --quiet --no-index --find-links="${OFFLINE_DIR}/wheels" \
+            fastapi "uvicorn[standard]" python-multipart pydantic pyyaml pytest httpx
+    else
+        pip install --quiet fastapi "uvicorn[standard]" python-multipart pydantic pyyaml pytest httpx
+    fi
 
     # 将 MLIR binding 路径写入 activate（幂等）
     if ! grep -qF "$MLIR_BINDING" "${VENV_DIR}/bin/activate" 2>/dev/null; then
@@ -273,12 +304,21 @@ try {
     fi
 
     if [[ "$_need_install" == true ]]; then
-        npm_args=(--prefix "$FRONTEND_DIR" install --legacy-peer-deps)
-        [[ -n "$NPM_REGISTRY" ]] && npm_args+=(--registry "$NPM_REGISTRY")
-        npm "${npm_args[@]}"
-        ok "前端依赖安装完成"
+        if [[ -n "$OFFLINE_DIR" && -f "${OFFLINE_DIR}/node_modules.tar.gz" ]]; then
+            info "离线模式：从 bundle 解压 node_modules..."
+            tar -xzf "${OFFLINE_DIR}/node_modules.tar.gz" -C "$FRONTEND_DIR"
+            ok "前端依赖已从离线包解压"
+        else
+            npm_args=(--prefix "$FRONTEND_DIR" install --legacy-peer-deps)
+            [[ -n "$NPM_REGISTRY" ]] && npm_args+=(--registry "$NPM_REGISTRY")
+            npm "${npm_args[@]}"
+            ok "前端依赖安装完成"
+        fi
     fi
 fi
+
+# ── 清理临时目录 ──────────────────────────────────────────────
+[[ -n "$OFFLINE_DIR" ]] && rm -rf "$OFFLINE_DIR"
 
 # ── 生成启动脚本 ──────────────────────────────────────────────
 info "生成启动脚本..."
