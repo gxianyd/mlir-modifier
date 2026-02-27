@@ -88,7 +88,30 @@ class MyAddOp:
 
 将生成的 Python 文件放入 MLIR Python binding 的 `dialects` 包路径下。有两种方式：
 
-### 方式 A：直接复制到 MLIR Python 包（推荐开发时使用）
+### 方式 A：一键脚本（推荐）
+
+使用项目提供的 `scripts/import-dialect.sh` 脚本，自动完成复制、注册、验证三步：
+
+```bash
+# 仅有 ops gen 文件（脚本会自动生成入口模块）
+./scripts/import-dialect.sh mydia ./build/_mydia_ops_gen.py
+
+# 同时提供入口模块
+./scripts/import-dialect.sh mydia ./build/mydia.py ./build/_mydia_ops_gen.py
+```
+
+脚本会依次：
+1. 将 binding 文件复制到 `$MLIR_PYTHON_ROOT/mlir/dialects/`
+2. 若缺少 `mydia.py` 入口，自动从 `_mydia_ops_gen.py` 生成
+3. 将 `"mydia"` 写入 `backend/app/services/dialect_registry.py` 的 `_BUILTIN_DIALECT_MODULES`
+4. 运行验证，打印 op 列表和签名
+
+完成后重启后端：`./start-backend.sh`
+
+> 如需手动操作，参考下方"手动步骤"。
+
+<details>
+<summary>手动步骤（方式 A 原始命令）</summary>
 
 ```bash
 MLIR_PYTHON_ROOT=/path/to/llvm-project/build/tools/mlir/python_packages/mlir_core
@@ -97,6 +120,10 @@ MLIR_PYTHON_ROOT=/path/to/llvm-project/build/tools/mlir/python_packages/mlir_cor
 cp _mydia_ops_gen.py  $MLIR_PYTHON_ROOT/mlir/dialects/
 cp MyDialect.py       $MLIR_PYTHON_ROOT/mlir/dialects/mydia.py
 ```
+
+然后手动将 `"mydia"` 添加到 `backend/app/services/dialect_registry.py` 中的 `_BUILTIN_DIALECT_MODULES`。
+
+</details>
 
 ### 方式 B：通过 PYTHONPATH 导入
 
@@ -137,23 +164,13 @@ for name, obj in inspect.getmembers(mydia, inspect.isclass):
 
 ## 步骤 3：注册到 MLIR Modifier
 
-编辑 `backend/app/services/dialect_registry.py`，将 dialect 名添加到 `_BUILTIN_DIALECT_MODULES` 列表：
+使用方式 A 脚本时，此步骤已自动完成。
+
+手动注册时，编辑 `backend/app/services/dialect_registry.py`，将 dialect 名添加到 `_BUILTIN_DIALECT_MODULES` 列表：
 
 ```python
 _BUILTIN_DIALECT_MODULES: list[str] = [
-    "arith",
-    "func",
-    "scf",
-    "memref",
-    "tensor",
-    "linalg",
-    "math",
-    "cf",
-    "affine",
-    "vector",
-    "gpu",
-    "index",
-    "bufferization",
+    ...
     "tosa",
     "mydia",    # <-- 添加你的 dialect
 ]

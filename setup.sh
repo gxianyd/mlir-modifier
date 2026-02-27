@@ -29,7 +29,7 @@ error() { echo -e "\033[31m[ERROR]\033[0m $*"; exit 1; }
 # ── 默认值 ──────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LLVM_DIR="$(realpath -m "${SCRIPT_DIR}/../llvm-project")"
-LLVM_TAG=""
+LLVM_TAG="llvmorg-19.1.7"      # 经过验证的稳定版本；覆盖: --llvm-tag main
 JOBS="$(nproc)"
 CC_BIN=""
 CXX_BIN=""
