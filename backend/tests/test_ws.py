@@ -31,26 +31,22 @@ class TestWebSocket:
 
     def test_ws_receives_broadcast(self):
         """Connected client receives validation broadcast."""
+        import asyncio
         client = TestClient(app)
         ir_manager.load(SIMPLE_MLIR)
 
         with client.websocket_connect("/ws/validation") as ws:
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(
-                notifier.broadcast(True, [])
-            )
+            asyncio.run(notifier.broadcast(True, []))
             data = ws.receive_json()
             assert data["valid"] is True
             assert data["diagnostics"] == []
 
     def test_ws_broadcast_invalid(self):
         """Broadcast with diagnostics is received correctly."""
+        import asyncio
         client = TestClient(app)
         with client.websocket_connect("/ws/validation") as ws:
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(
-                notifier.broadcast(False, ["error: something went wrong"])
-            )
+            asyncio.run(notifier.broadcast(False, ["error: something went wrong"]))
             data = ws.receive_json()
             assert data["valid"] is False
             assert len(data["diagnostics"]) == 1
@@ -58,14 +54,12 @@ class TestWebSocket:
 
     def test_ws_multiple_clients(self):
         """Multiple clients all receive broadcasts."""
+        import asyncio
         client = TestClient(app)
         with client.websocket_connect("/ws/validation") as ws1:
             with client.websocket_connect("/ws/validation") as ws2:
                 assert notifier.connection_count >= 2
-                import asyncio
-                asyncio.get_event_loop().run_until_complete(
-                    notifier.broadcast(True, [])
-                )
+                asyncio.run(notifier.broadcast(True, []))
                 d1 = ws1.receive_json()
                 d2 = ws2.receive_json()
                 assert d1["valid"] is True

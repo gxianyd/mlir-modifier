@@ -64,7 +64,7 @@ function OpNode({ data }: NodeProps<OpNodeType>) {
           position={Position.Top}
           id={`in-${i}`}
           style={{
-            left: `${((i + 1) / (data.operands.length + 1)) * 100}%`,
+            left: `${((i + 1) / (data.operands.length + 2)) * 100}%`,
             background: color.header,
             width: 8,
             height: 8,
@@ -72,6 +72,24 @@ function OpNode({ data }: NodeProps<OpNodeType>) {
           }}
         />
       ))}
+
+      {/* Add new operand handle */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        id="in-add"
+        style={{
+          left: `${((data.operands.length + 1) / (data.operands.length + 2)) * 100}%`,
+          background: color.header,
+          opacity: 0.6,
+          width: 12,
+          height: 12,
+          border: '2px dashed #999',
+          cursor: 'crosshair',
+          zIndex: 10,
+        }}
+        title="Add new operand"
+      />
 
       {/* Header */}
       <div style={{

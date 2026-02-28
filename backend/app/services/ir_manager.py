@@ -445,7 +445,8 @@ class IRManager:
         Redirects all uses of old results to the new results.
         """
         result_types = [r.type for r in old_op.results]
-        attrs = {name: old_op.attributes[name] for name in old_op.attributes}
+        # Iterating op.attributes yields NamedAttribute objects; extract name/attr.
+        attrs = {na.name: na.attr for na in old_op.attributes}
         num_regions = len(old_op.regions)
 
         ip = ir.InsertionPoint(old_op)
@@ -458,6 +459,11 @@ class IRManager:
             loc=old_op.location,
             ip=ip,
         )
+        # ir.Operation.create() may return a dialect-specific OpView (e.g. PowOp
+        # for math.powf) when the dialect has registered Python classes.
+        # Unwrap to the raw ir.Operation so callers always receive a consistent type.
+        if not isinstance(new_op, ir.Operation):
+            new_op = new_op.operation
 
         # Transfer region contents from old op to new op.
         # Block.append_to(region) detaches the block from its current region
@@ -593,8 +599,15 @@ class IRManager:
         If a producer is after the consumer, performs a topological sort of
         all ops in the block and reorders them via ``move_after``.
         """
-        parent_block = consumer_op.block
-        if parent_block is None:
+        # Normalize: ir.Operation.create() may return a dialect-specific OpView
+        # for registered ops (e.g. math.powf → PowOp). Unwrap to ir.Operation.
+        if not isinstance(consumer_op, ir.Operation):
+            consumer_op = consumer_op.operation  # type: ignore[union-attr]
+        # ir.Operation has no .block attribute in this MLIR version; use
+        # InsertionPoint to access the parent block.
+        try:
+            parent_block = ir.InsertionPoint(consumer_op).block
+        except Exception:
             return
 
         # Build position map: op -> index in block
@@ -605,11 +618,13 @@ class IRManager:
         if consumer_pos is None:
             return
 
-        # Check if any same-block producer is after the consumer
+        # Check if any same-block producer is after the consumer.
+        # NOTE: In some MLIR Python Binding builds, isinstance(v, ir.OpResult)
+        # always returns False even for OpResult values; use ir.OpResult.isinstance().
         needs_reorder = False
         for operand in consumer_op.operands:
-            if isinstance(operand, ir.OpResult):
-                producer = operand.owner
+            if ir.OpResult.isinstance(operand):
+                producer = ir.OpResult(operand).owner
                 producer_pos = op_to_pos.get(producer)
                 if producer_pos is not None and producer_pos > consumer_pos:
                     needs_reorder = True
@@ -628,8 +643,8 @@ class IRManager:
         for op_view in ops_list:
             op = op_view.operation
             for operand in op.operands:
-                if isinstance(operand, ir.OpResult):
-                    prod = operand.owner
+                if ir.OpResult.isinstance(operand):
+                    prod = ir.OpResult(operand).owner
                     if prod in ops_set and prod != op:
                         predecessors[op].add(prod)
 

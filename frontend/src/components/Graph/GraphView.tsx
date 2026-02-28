@@ -282,10 +282,14 @@ export default function GraphView({
       const valueId = resolveSourceValueId(graph, source, sourceHandle);
       if (!valueId) return;
 
+      // Check if connecting to the "add" handle
+      if (targetHandle === 'in-add') {
+        // Add new operand
+        onConnectProp(target, valueId, null);
+        return;
+      }
+
       const operandIndex = parseHandleIndex(targetHandle);
-      // Pass null for operandIndex to indicate "append" (add new operand)
-      // The target op's current operand count determines if this is
-      // connecting to an existing slot or adding a new one.
       const targetOp = graph.operations.find((o) => o.op_id === target);
       if (!targetOp) return;
 

@@ -133,9 +133,6 @@ class TestModifyAttributes:
 @pytest.mark.anyio
 class TestModifyAttributesAPI:
     async def test_modify_attr_endpoint(self, client):
-        # Load model first
-        with open("/dev/stdin", "w"):
-            pass  # just to ensure we have a module loaded
         import io
         content = SIMPLE_MLIR.encode()
         files = {"file": ("test.mlir", io.BytesIO(content), "text/plain")}
