@@ -16,7 +16,8 @@
     "antd": "^6.3.0",
     "axios": "^1.13.5",
     "dagre": "^0.8.5",
-"react": "^19.2.0",
+    "elkjs": "^0.11.0",
+    "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
