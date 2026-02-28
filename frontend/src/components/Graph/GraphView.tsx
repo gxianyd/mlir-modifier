@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import {
   ReactFlow,
   Background,
@@ -6,9 +6,11 @@ import {
   MiniMap,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type NodeTypes,
   type Connection,
   type Edge,
+  type Node,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
@@ -86,10 +88,35 @@ function resolveSourceValueId(
 }
 
 /**
+ * Inner component that syncs externally-computed layout into React Flow state
+ * and calls fitView after each update. Must be rendered inside <ReactFlow>
+ * so that useReactFlow() has access to the ReactFlow context.
+ */
+function LayoutSyncer({
+  layoutedNodes,
+  layoutedEdges,
+  setNodes,
+  setEdges,
+}: {
+  layoutedNodes: Node[];
+  layoutedEdges: Edge[];
+  setNodes: (ns: Node[]) => void;
+  setEdges: (es: Edge[]) => void;
+}) {
+  const { fitView } = useReactFlow();
+  useEffect(() => {
+    setNodes(layoutedNodes);
+    setEdges(layoutedEdges);
+    requestAnimationFrame(() => fitView({ duration: 300, padding: 0.1 }));
+  }, [layoutedNodes, layoutedEdges, setNodes, setEdges, fitView]);
+  return null;
+}
+
+/**
  * GraphView — the main React Flow canvas.
  *
  * Converts the IR graph to React Flow nodes/edges using the current viewPath,
- * applies hierarchical dagre layout, and renders the interactive graph.
+ * applies hierarchical ELK layout, and renders the interactive graph.
  *
  * Interactions:
  *   - Single-click node → select it (shows properties in panel)
@@ -112,14 +139,25 @@ export default function GraphView({
   onAddToOutput,
   hiddenOpNames,
 }: GraphViewProps) {
-  // Convert IR graph → React Flow nodes/edges, applying nesting and layout
-  const { layoutedNodes, layoutedEdges } = useMemo(() => {
+  // Async ELK layout: recompute whenever graph, viewPath, or hiddenOpNames changes
+  const [layoutedNodes, setLayoutedNodes] = useState<Node[]>([]);
+  const [layoutedEdges, setLayoutedEdges] = useState<Edge[]>([]);
+
+  useEffect(() => {
     if (!graph || viewPath.length === 0) {
-      return { layoutedNodes: [], layoutedEdges: [] };
+      setLayoutedNodes([]);
+      setLayoutedEdges([]);
+      return;
     }
-    const { nodes, edges } = irToFlow(graph, viewPath, 0, hiddenOpNames);
-    const result = layoutGraph(nodes, edges);
-    return { layoutedNodes: result.nodes, layoutedEdges: result.edges };
+    let cancelled = false;
+    const { nodes: flowNodes, edges: flowEdges } = irToFlow(graph, viewPath, 0, hiddenOpNames);
+    layoutGraph(flowNodes, flowEdges).then((result) => {
+      if (!cancelled) {
+        setLayoutedNodes(result.nodes);
+        setLayoutedEdges(result.edges);
+      }
+    });
+    return () => { cancelled = true; };
   }, [graph, viewPath, hiddenOpNames]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
@@ -137,12 +175,6 @@ export default function GraphView({
     opId?: string;
     edge?: Edge;
   } | null>(null);
-
-  // Sync React Flow state when the computed layout changes
-  useEffect(() => {
-    setNodes(layoutedNodes);
-    setEdges(layoutedEdges);
-  }, [layoutedNodes, layoutedEdges, setNodes, setEdges]);
 
   // Single-click node → select node, deselect edge
   const onNodeClick = useCallback(
@@ -343,10 +375,15 @@ export default function GraphView({
         onReconnect={handleReconnect}
         nodeTypes={nodeTypes}
         edgesReconnectable
-        fitView
         minZoom={0.1}
         maxZoom={2}
       >
+        <LayoutSyncer
+          layoutedNodes={layoutedNodes}
+          layoutedEdges={layoutedEdges}
+          setNodes={setNodes}
+          setEdges={setEdges}
+        />
         <Background />
         <Controls />
         <MiniMap />
