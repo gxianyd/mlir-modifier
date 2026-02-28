@@ -1,5 +1,6 @@
-import { Upload, Button, Space, Select } from 'antd';
-import { UploadOutlined, DownloadOutlined, PlusOutlined, UndoOutlined, RedoOutlined } from '@ant-design/icons';
+import { useState } from 'react';
+import { Upload, Button, Space, Select, Popover, Checkbox, Badge } from 'antd';
+import { UploadOutlined, DownloadOutlined, PlusOutlined, UndoOutlined, RedoOutlined, FilterOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 
 /** A top-level function entry for the function selector */
@@ -24,6 +25,12 @@ interface ToolbarProps {
   onRedo?: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
+  /** All op names present in the current graph (for the filter checklist) */
+  availableOpNames?: string[];
+  /** Set of op names currently hidden from the graph */
+  hiddenOpNames?: Set<string>;
+  /** Called when the user changes the hidden op set */
+  onHiddenChange?: (hidden: Set<string>) => void;
 }
 
 export default function Toolbar({
@@ -38,7 +45,12 @@ export default function Toolbar({
   onRedo,
   canUndo = false,
   canRedo = false,
+  availableOpNames = [],
+  hiddenOpNames = new Set(),
+  onHiddenChange,
 }: ToolbarProps) {
+  const [filterOpen, setFilterOpen] = useState(false);
+
   const uploadProps: UploadProps = {
     accept: '.mlir',
     showUploadList: false,
@@ -102,6 +114,61 @@ export default function Toolbar({
           >
             Add Op
           </Button>
+        )}
+
+        {hasModel && (
+          <Popover
+            open={filterOpen}
+            onOpenChange={setFilterOpen}
+            trigger="click"
+            placement="bottomRight"
+            title="Op 类型过滤"
+            content={
+              <div style={{ minWidth: 200, maxHeight: 320, overflowY: 'auto' }}>
+                {availableOpNames.length === 0 ? (
+                  <span style={{ color: '#999', fontSize: 12 }}>暂无 Op 类型</span>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {availableOpNames.map((name) => (
+                      <Checkbox
+                        key={name}
+                        checked={!hiddenOpNames.has(name)}
+                        onChange={(e) => {
+                          const next = new Set(hiddenOpNames);
+                          if (e.target.checked) {
+                            next.delete(name);
+                          } else {
+                            next.add(name);
+                          }
+                          onHiddenChange?.(next);
+                        }}
+                      >
+                        {name}
+                      </Checkbox>
+                    ))}
+                  </div>
+                )}
+                <div style={{ marginTop: 8, borderTop: '1px solid #f0f0f0', paddingTop: 6, display: 'flex', gap: 12 }}>
+                  <span
+                    style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }}
+                    onClick={() => onHiddenChange?.(new Set())}
+                  >
+                    全选
+                  </span>
+                  <span
+                    style={{ color: '#1677ff', cursor: 'pointer', fontSize: 12 }}
+                    onClick={() => onHiddenChange?.(new Set(availableOpNames))}
+                  >
+                    全不选
+                  </span>
+                </div>
+              </div>
+            }
+          >
+            <Badge count={hiddenOpNames.size} size="small">
+              <Button icon={<FilterOutlined />}>Filter</Button>
+            </Badge>
+          </Popover>
         )}
       </Space>
     </div>

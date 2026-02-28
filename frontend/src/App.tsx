@@ -39,6 +39,7 @@ function App() {
   const [validationStatus, setValidationStatus] = useState<{ valid: boolean; diagnostics: string[] }>({ valid: true, diagnostics: [] });
   const [showOpCreator, setShowOpCreator] = useState(false);
   const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false });
+  const [hiddenOpNames, setHiddenOpNames] = useState<Set<string>>(new Set());
 
   // Real-time validation via WebSocket — merge into local state
   const wsValidation = useValidation();
@@ -267,6 +268,11 @@ function App() {
   // ── Keyboard shortcuts ──
   useKeyboardShortcuts({ onUndo: handleUndo, onRedo: handleRedo });
 
+  // All unique op names present in the current graph (for the filter checklist)
+  const availableOpNames = useMemo(() =>
+    graph ? [...new Set(graph.operations.map((o) => o.name))].sort() : []
+  , [graph]);
+
   // Build function options for the toolbar selector
   const functionOptions = useMemo(() => {
     return functions.map((f) => ({
@@ -289,6 +295,9 @@ function App() {
         onRedo={handleRedo}
         canUndo={historyStatus.canUndo}
         canRedo={historyStatus.canRedo}
+        availableOpNames={availableOpNames}
+        hiddenOpNames={hiddenOpNames}
+        onHiddenChange={setHiddenOpNames}
       />
       {/* Breadcrumb bar — only shows when drilled deeper than the function level */}
       <Breadcrumb items={breadcrumbs} onNavigate={handleBreadcrumbNavigate} />
@@ -308,6 +317,7 @@ function App() {
           onDeleteEdge={handleDeleteEdge}
           onReconnectEdge={handleReconnectEdge}
           onAddToOutput={handleAddToOutput}
+          hiddenOpNames={hiddenOpNames}
         />
         <PropertyPanel selectedOp={selectedOp} onAttributeEdit={handleAttributeEdit} onRemoveOperand={handleDeleteEdge} />
       </div>

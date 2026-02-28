@@ -26,3 +26,7 @@ Thumbs.db
 
 # LLVM build (not part of this repo)
 llvm-project/
+
+# Agent memory, plans, and local dev context (not part of repo)
+.mem/
+.claude/

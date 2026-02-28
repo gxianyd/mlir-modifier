@@ -121,6 +121,7 @@ function walkRegions(
   nodes: Node[],
   visibleOpIds: Set<string>,
   visibleInputNodeIds: Set<string>,
+  hiddenOpNames?: Set<string>,
 ): void {
   const { opMap, blockMap, regionMap, blockArgNodeMap } = lookups;
 
@@ -156,6 +157,9 @@ function walkRegions(
         const op = opMap.get(opId);
         if (!op) continue;
 
+        // Skip ops whose name is in the hidden set
+        if (hiddenOpNames?.has(op.name)) continue;
+
         const hasRegions = op.regions.length > 0;
 
         if (hasRegions && depth <= maxExpandDepth) {
@@ -188,6 +192,7 @@ function walkRegions(
             nodes,
             visibleOpIds,
             visibleInputNodeIds,
+            hiddenOpNames,
           );
         } else if (hasRegions && depth > maxExpandDepth) {
           // ── Collapsed op (depth exceeds threshold) ──
@@ -323,6 +328,7 @@ export function irToFlow(
   graph: IRGraph,
   viewPath: string[],
   maxExpandDepth: number = DEFAULT_MAX_EXPAND_DEPTH,
+  hiddenOpNames?: Set<string>,
 ): { nodes: Node[]; edges: Edge[] } {
   // Build O(1) lookup maps from the flat arrays
   const lookups = buildLookups(graph);
@@ -340,7 +346,7 @@ export function irToFlow(
   const visibleInputNodeIds = new Set<string>();
 
   // Recursively generate nodes, starting at depth=1
-  walkRegions(regionIds, 1, maxExpandDepth, lookups, nodes, visibleOpIds, visibleInputNodeIds);
+  walkRegions(regionIds, 1, maxExpandDepth, lookups, nodes, visibleOpIds, visibleInputNodeIds, hiddenOpNames);
 
   // Generate edges between visible ops and input nodes
   const edges = generateEdges(visibleOpIds, visibleInputNodeIds, lookups);

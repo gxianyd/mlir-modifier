@@ -37,6 +37,8 @@ interface GraphViewProps {
   onReconnectEdge?: (targetOpId: string, operandIndex: number, newValueId: string) => void;
   /** Callback when user adds an op result to the function output */
   onAddToOutput?: (opId: string, resultIndex: number) => void;
+  /** Set of op names (e.g. "arith.constant") to hide from the graph */
+  hiddenOpNames?: Set<string>;
 }
 
 /**
@@ -108,16 +110,17 @@ export default function GraphView({
   onDeleteEdge,
   onReconnectEdge,
   onAddToOutput,
+  hiddenOpNames,
 }: GraphViewProps) {
   // Convert IR graph → React Flow nodes/edges, applying nesting and layout
   const { layoutedNodes, layoutedEdges } = useMemo(() => {
     if (!graph || viewPath.length === 0) {
       return { layoutedNodes: [], layoutedEdges: [] };
     }
-    const { nodes, edges } = irToFlow(graph, viewPath);
+    const { nodes, edges } = irToFlow(graph, viewPath, 0, hiddenOpNames);
     const result = layoutGraph(nodes, edges);
     return { layoutedNodes: result.nodes, layoutedEdges: result.edges };
-  }, [graph, viewPath]);
+  }, [graph, viewPath, hiddenOpNames]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
