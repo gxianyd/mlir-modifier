@@ -36,6 +36,13 @@ export async function deleteOp(opId: string): Promise<EditResponse> {
   return response.data;
 }
 
+export async function deleteOpSingle(opId: string): Promise<EditResponse> {
+  const response = await api.delete<EditResponse>(`/op/${opId}`, {
+    params: { cascade: false },
+  });
+  return response.data;
+}
+
 export async function undo(): Promise<EditResponse> {
   const response = await api.post<EditResponse>('/undo');
   return response.data;

@@ -101,6 +101,45 @@ class TestDeleteOp:
         final = ir_manager.rebuild_graph()
         assert len(final.operations) < original_count
 
+    def test_delete_single_only_removes_target(self, ir_manager):
+        """delete_op_single removes the op itself but leaves users intact."""
+        graph = ir_manager.load(SIMPLE_MLIR)
+        mulf_op = next(op for op in graph.operations if op.name == "arith.mulf")
+        new_graph = ir_manager.delete_op_single(mulf_op.op_id)
+        op_names = [op.name for op in new_graph.operations]
+        assert "arith.mulf" not in op_names
+        assert "func.return" in op_names   # user not cascade-deleted
+        assert "arith.addf" in op_names    # upstream not affected
+
+    def test_delete_single_users_lose_operand(self, ir_manager):
+        """After delete_op_single, user op has one fewer operand."""
+        graph = ir_manager.load(SIMPLE_MLIR)
+        mulf_op = next(op for op in graph.operations if op.name == "arith.mulf")
+        ret_op = next(op for op in graph.operations if op.name == "func.return")
+        original_count = len(ret_op.operands)
+        new_graph = ir_manager.delete_op_single(mulf_op.op_id)
+        new_ret = next(op for op in new_graph.operations if op.name == "func.return")
+        assert len(new_ret.operands) == original_count - 1
+
+    def test_delete_single_undo_restores(self, ir_manager):
+        """Undo after delete_op_single restores the op and its connections."""
+        graph = ir_manager.load(SIMPLE_MLIR)
+        original_count = len(graph.operations)
+        mulf_op = next(op for op in graph.operations if op.name == "arith.mulf")
+        ir_manager.delete_op_single(mulf_op.op_id)
+        restored = ir_manager.undo()
+        assert len(restored.operations) == original_count
+        assert any(op.name == "arith.mulf" for op in restored.operations)
+
+    def test_delete_single_nonexistent_raises(self, ir_manager):
+        ir_manager.load(SIMPLE_MLIR)
+        with pytest.raises(KeyError):
+            ir_manager.delete_op_single("nonexistent_id")
+
+    def test_delete_single_without_module_raises(self, ir_manager):
+        with pytest.raises(ValueError):
+            ir_manager.delete_op_single("some_id")
+
 
 @pytest.mark.anyio
 class TestDeleteOpAPI:
@@ -126,3 +165,29 @@ class TestDeleteOpAPI:
 
         resp = await client.delete("/api/op/nonexistent")
         assert resp.status_code == 404
+
+    async def test_delete_single_endpoint(self, client):
+        """?cascade=false deletes only the target op, leaving users intact."""
+        content = SIMPLE_MLIR.encode()
+        files = {"file": ("test.mlir", io.BytesIO(content), "text/plain")}
+        load_resp = await client.post("/api/model/load", files=files)
+        graph = load_resp.json()
+        mulf_op = next(op for op in graph["operations"] if op["name"] == "arith.mulf")
+        resp = await client.delete(f"/api/op/{mulf_op['op_id']}?cascade=false")
+        assert resp.status_code == 200
+        op_names = [op["name"] for op in resp.json()["graph"]["operations"]]
+        assert "arith.mulf" not in op_names
+        assert "func.return" in op_names  # user survived
+
+    async def test_delete_cascade_default_preserved(self, client):
+        """Without ?cascade param, cascade=true is the default (original behavior)."""
+        content = SIMPLE_MLIR.encode()
+        files = {"file": ("test.mlir", io.BytesIO(content), "text/plain")}
+        load_resp = await client.post("/api/model/load", files=files)
+        graph = load_resp.json()
+        mulf_op = next(op for op in graph["operations"] if op["name"] == "arith.mulf")
+        resp = await client.delete(f"/api/op/{mulf_op['op_id']}")
+        assert resp.status_code == 200
+        op_names = [op["name"] for op in resp.json()["graph"]["operations"]]
+        assert "arith.mulf" not in op_names
+        assert "func.return" not in op_names  # cascade-deleted

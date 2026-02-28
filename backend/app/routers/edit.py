@@ -1,4 +1,6 @@
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Query
 
 from app.models.ir_schema import (
     AddOperandRequest,
@@ -47,10 +49,17 @@ async def redo():
 
 
 @router.delete("/op/{op_id}", response_model=EditResponse)
-async def delete_op(op_id: str):
-    """Delete an operation from the IR."""
+async def delete_op(op_id: str, cascade: Annotated[bool, Query()] = True):
+    """Delete an operation from the IR.
+
+    cascade=True (default): also deletes all dependent operations transitively.
+    cascade=False: deletes only this op, removing its results from user operand lists.
+    """
     try:
-        graph = ir_manager.delete_op(op_id)
+        if cascade:
+            graph = ir_manager.delete_op(op_id)
+        else:
+            graph = ir_manager.delete_op_single(op_id)
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

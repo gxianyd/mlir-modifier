@@ -14,23 +14,28 @@ const elk = new ELK();
 /**
  * Build ELK port descriptors for a node.
  *
- * InputNodes (block arguments) have a single output port `out-0` at the bottom.
+ * ELK requires port IDs to be globally unique across the entire graph.
+ * We use compound IDs of the form `nodeId:portId` so edge references
+ * (which also use `nodeId:portId`) resolve correctly.
+ *
+ * InputNodes have a single output port at the bottom.
  * OpNodes have `in-N` ports at the top and `out-N` ports at the bottom.
- * Port indices control the left-to-right ordering enforced by ELK's
- * FIXED_ORDER port constraint, which naturally eliminates operand-order
- * edge crossings without any post-processing.
+ * Port indices control left-to-right ordering under FIXED_ORDER constraints.
  */
 function buildElkPorts(node: Node): Array<{ id: string; properties: Record<string, string> }> {
   if (node.id.startsWith('input_')) {
-    return [{ id: 'out-0', properties: { 'port.side': 'SOUTH', 'port.index': '0' } }];
+    return [{
+      id: `${node.id}:out-0`,
+      properties: { 'port.side': 'SOUTH', 'port.index': '0' },
+    }];
   }
   const data = node.data as { operands?: unknown[]; results?: unknown[] };
   const ports: Array<{ id: string; properties: Record<string, string> }> = [];
   (data.operands ?? []).forEach((_, i) =>
-    ports.push({ id: `in-${i}`, properties: { 'port.side': 'NORTH', 'port.index': `${i}` } }),
+    ports.push({ id: `${node.id}:in-${i}`, properties: { 'port.side': 'NORTH', 'port.index': `${i}` } }),
   );
   (data.results ?? []).forEach((_, i) =>
-    ports.push({ id: `out-${i}`, properties: { 'port.side': 'SOUTH', 'port.index': `${i}` } }),
+    ports.push({ id: `${node.id}:out-${i}`, properties: { 'port.side': 'SOUTH', 'port.index': `${i}` } }),
   );
   return ports;
 }
@@ -38,11 +43,9 @@ function buildElkPorts(node: Node): Array<{ id: string; properties: Record<strin
 /**
  * Compute positions for all nodes using the ELK `layered` algorithm.
  *
- * Compared to the previous Dagre-based layout:
- *  - FIXED_ORDER port constraints enforce operand index ordering natively,
- *    eliminating the need for a post-processing reorder step.
- *  - LAYER_SWEEP crossing minimization reduces edge crossings more aggressively.
- *  - SPLINES edge routing guides ELK to position nodes with better edge paths.
+ * - FIXED_ORDER port constraints enforce operand index ordering natively.
+ * - LAYER_SWEEP crossing minimization reduces edge crossings.
+ * - SPLINES edge routing avoids routing edges through nodes.
  *
  * The function is async because ELK's layout API is Promise-based.
  *

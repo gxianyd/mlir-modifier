@@ -29,8 +29,10 @@ interface GraphViewProps {
   onSelectOp: (op: OperationInfo | null) => void;
   /** Callback when user double-clicks a collapsed node to drill into it */
   onDrillIn: (opId: string) => void;
-  /** Callback when user requests to delete the selected op */
+  /** Callback when user requests to delete the selected op (cascade) */
   onDeleteOp?: (opId: string) => void;
+  /** Callback when user requests to delete only the selected op (single) */
+  onDeleteOpSingle?: (opId: string) => void;
   /** Callback when user connects two handles (add edge) */
   onConnect?: (targetOpId: string, sourceValueId: string, operandIndex: number | null) => void;
   /** Callback when user deletes an edge */
@@ -133,6 +135,7 @@ export default function GraphView({
   onSelectOp,
   onDrillIn,
   onDeleteOp,
+  onDeleteOpSingle,
   onConnect: onConnectProp,
   onDeleteEdge,
   onReconnectEdge,
@@ -156,6 +159,8 @@ export default function GraphView({
         setLayoutedNodes(result.nodes);
         setLayoutedEdges(result.edges);
       }
+    }).catch((err) => {
+      console.error('ELK layout failed:', err);
     });
     return () => { cancelled = true; };
   }, [graph, viewPath, hiddenOpNames]);
@@ -241,6 +246,13 @@ export default function GraphView({
     setContextMenu(null);
   }, [contextMenu, onDeleteOp]);
 
+  const handleContextDeleteNodeSingle = useCallback(() => {
+    if (contextMenu?.type === 'node' && contextMenu.opId && onDeleteOpSingle) {
+      onDeleteOpSingle(contextMenu.opId);
+    }
+    setContextMenu(null);
+  }, [contextMenu, onDeleteOpSingle]);
+
   // Handle context menu "Add to Output"
   const handleContextAddToOutput = useCallback((resultIndex: number) => {
     if (contextMenu?.type === 'node' && contextMenu.opId && onAddToOutput) {
@@ -324,15 +336,15 @@ export default function GraphView({
             return;
           }
         }
-        if (selectedNodeIdRef.current && onDeleteOp) {
+        if (selectedNodeIdRef.current && onDeleteOpSingle) {
           e.preventDefault();
-          onDeleteOp(selectedNodeIdRef.current);
+          onDeleteOpSingle(selectedNodeIdRef.current);
         }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onDeleteOp, onDeleteEdge]);
+  }, [onDeleteOpSingle, onDeleteEdge]);
 
   // Close context menu on click outside
   useEffect(() => {
@@ -432,6 +444,20 @@ export default function GraphView({
                     ))
                   )
                 )}
+                {onDeleteOpSingle && (
+                  <div
+                    style={{
+                      padding: '6px 16px',
+                      cursor: 'pointer',
+                      fontSize: 13,
+                    }}
+                    onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                    onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                    onClick={handleContextDeleteNodeSingle}
+                  >
+                    Delete Node
+                  </div>
+                )}
                 {onDeleteOp && (
                   <div
                     style={{
@@ -444,7 +470,7 @@ export default function GraphView({
                     onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
                     onClick={handleContextDeleteNode}
                   >
-                    Delete Node
+                    Delete Nodes From Here
                   </div>
                 )}
               </>

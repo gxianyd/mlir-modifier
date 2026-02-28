@@ -41,8 +41,8 @@ source "${VENV}/bin/activate"
 
 # ── 定位 MLIR Python 包 ─────────────────────────────────────
 MLIR_PYTHON_ROOT=$(python3 -c "
-import mlir, os
-print(os.path.dirname(mlir.__file__))
+import mlir.ir, os
+print(os.path.dirname(mlir.ir.__file__))
 " 2>/dev/null) || error "找不到 mlir Python 包，检查 venv 中的 PYTHONPATH 是否正确"
 
 DIALECTS_DIR="${MLIR_PYTHON_ROOT}/dialects"

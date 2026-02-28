@@ -6,7 +6,7 @@ import GraphView from './components/Graph/GraphView';
 import PropertyPanel from './components/PropertyPanel/PropertyPanel';
 import ValidationBanner from './components/ValidationBanner';
 import OpCreator from './components/OpCreator/OpCreator';
-import { loadModel, saveModel, modifyAttributes, deleteOp, undo as apiUndo, redo as apiRedo, getHistoryStatus, createOp, setOperand, removeOperand, addOperand, addToOutput, type CreateOpRequest } from './services/api';
+import { loadModel, saveModel, modifyAttributes, deleteOp, deleteOpSingle, undo as apiUndo, redo as apiRedo, getHistoryStatus, createOp, setOperand, removeOperand, addOperand, addToOutput, type CreateOpRequest } from './services/api';
 import useValidation from './hooks/useValidation';
 import useKeyboardShortcuts from './hooks/useKeyboardShortcuts';
 import type { IRGraph, OperationInfo } from './types/ir';
@@ -170,6 +170,17 @@ function App() {
     }
   }, [applyEditResponse]);
 
+  // ── Op deletion (single — cascade=false) ──
+  const handleDeleteOpSingle = useCallback(async (opId: string) => {
+    try {
+      const resp = await deleteOpSingle(opId);
+      applyEditResponse(resp);
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      message.error(`Failed to delete node: ${detail}`);
+    }
+  }, [applyEditResponse]);
+
   // ── Undo (used by validation banner quick-action) ──
   const handleUndo = useCallback(async () => {
     try {
@@ -313,6 +324,7 @@ function App() {
           onSelectOp={setSelectedOp}
           onDrillIn={handleDrillIn}
           onDeleteOp={handleDeleteOp}
+          onDeleteOpSingle={handleDeleteOpSingle}
           onConnect={handleConnect}
           onDeleteEdge={handleDeleteEdge}
           onReconnectEdge={handleReconnectEdge}

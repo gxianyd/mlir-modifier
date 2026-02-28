@@ -170,6 +170,61 @@ class IRManager:
 
         return self.rebuild_graph()
 
+    def delete_op_single(self, op_id: str) -> IRGraph:
+        """Delete only this op; remove its results from user ops' operand lists.
+
+        Unlike delete_op(), this method does NOT cascade to dependent operations.
+        Instead, any operand in a user op that references a result of the deleted
+        op is removed (the user op is recreated with fewer operands).
+        """
+        if self.module is None:
+            raise ValueError("No module loaded")
+        if op_id not in self._op_map:
+            raise KeyError(f"Unknown op_id: {op_id}")
+
+        self._snapshot()
+        op = self._op_map[op_id]
+
+        try:
+            # Collect per-user-op the operand indices that reference this op's results.
+            # A single user op may reference multiple results, so we accumulate all
+            # matching indices before recreating.
+            # key: id(user_op)  value: [user_op, [indices...]]
+            users: dict[int, list] = {}
+            for res in op.results:
+                for use in list(res.uses):
+                    user_op = use.owner
+                    key = id(user_op)
+                    if key not in users:
+                        users[key] = [user_op, []]
+                    for i, operand in enumerate(user_op.operands):
+                        if operand == res:
+                            users[key][1].append(i)
+
+            # Recreate each user op without the affected operands.
+            # Remove highest index first to preserve lower index validity.
+            for _key, (user_op, indices) in users.items():
+                new_operands = list(user_op.operands)
+                for i in sorted(set(indices), reverse=True):
+                    new_operands.pop(i)
+                is_return = user_op.name in ("func.return", "return")
+                func_op_for_sync = None
+                if is_return:
+                    func_op_for_sync, _ = self._find_func_and_return(user_op)
+                self._recreate_op_with_operands(user_op, new_operands)
+                if is_return and func_op_for_sync is not None:
+                    self._sync_func_type(func_op_for_sync)
+
+            # All uses are now gone; safe to erase
+            op.erase()
+        except Exception:
+            rollback_text = self.history.undo(str(self.module))
+            self._reparse(rollback_text)
+            self.rebuild_graph()
+            raise
+
+        return self.rebuild_graph()
+
     def _collect_dependents(
         self,
         op: ir.Operation,
