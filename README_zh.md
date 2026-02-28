@@ -98,23 +98,126 @@ cd mlir-modifier
 
 适用于无网络访问的集群环境：
 
-> **预构建 bundle**：每个 [GitHub Release](https://github.com/gxianyd/mlir-modifier/releases)
-> 附带 Linux x86_64 平台的 bundle 文件（Python 3.10 / 3.11 / 3.12），
-> 下载与你的 Python 版本匹配的文件，可跳过 Step 1。
+> **重要说明**：离线 bundle 只包含前后端环境依赖，**不包含 MLIR Python bindings**。
+> 使用前需要在目标机器上预先安装 MLIR。
+
+### 安装 MLIR（必需）
+
+在使用本项目的离线 bundle 前，需要先安装 MLIR Python bindings：
+
+#### 方法 1: 使用 Conda（推荐）
 
 ```bash
-# Step 1：在有网络的机器上打包依赖
+# 安装 MLIR
+conda install -c conda-forge mlir
+
+# 验证安装
+python3 -c "import mlir.ir as ir; print('MLIR found at:', ir.__file__)"
+```
+
+#### 方法 2: 从源码编译
+
+```bash
+# 克隆 LLVM 源码
+git clone --depth 1 --branch llvmorg-19.1.7 https://github.com/llvm/llvm-project.git
+cd llvm-project
+
+# 配置和编译
+mkdir build && cd build
+cmake -G Ninja \
+  -DLLVM_ENABLE_PROJECTS=mlir \
+  -DLLVM_TARGETS_TO_BUILD=host \
+  -DMLIR_ENABLE_BINDINGS_PYTHON=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  ../llvm
+
+# 编译 MLIR Python bindings
+cmake --build . --target MLIRPythonModules -j$(nproc)
+
+# 设置环境变量
+export PYTHONPATH=$PWD/tools/mlir/python_packages/mlir_core:$PYTHONPATH
+```
+
+### 使用离线 Bundle
+
+> **预构建 bundle**：每个 [GitHub Release](https://github.com/gxianyd/mlir-modifier/releases)
+> 附带 Linux x86_64 / macOS 平台的 bundle 文件（Python 3.10 / 3.11 / 3.12 / 3.14），
+> 下载与你的 Python 版本匹配的文件。
+
+```bash
+# Step 1：在有网络的机器上打包前后端依赖
 ./scripts/bundle-offline.sh
-# → 生成 offline-bundle.tar.gz
+# → 生成 offline-bundle.tar.gz (约 40-50 MB)
 
 # Step 2：传输到集群节点
 scp offline-bundle.tar.gz hpc-node:~/mlir-modifier/
 
-# Step 3：在集群上安装（需提前单独编译 LLVM）
+# Step 3：在集群上安装（MLIR 必须已安装）
+cd ~/mlir-modifier
 ./setup.sh --skip-llvm --offline offline-bundle.tar.gz
 ```
 
-bundle 包含预下载的 Python wheel 文件和压缩后的 `node_modules` 快照。
+### Bundle 内容
+
+Bundle 包含：
+- ✅ Python 后端依赖（FastAPI, uvicorn, pydantic 等）
+- ✅ 前端 node_modules 依赖
+- ❌ 不包含 MLIR Python bindings（需单独安装）
+- ❌ 不包含 LLVM 编译产物
+
+### 验证安装
+
+安装后验证 MLIR 可用性：
+
+```bash
+source backend/.venv/bin/activate
+python3 -c "
+import mlir.ir as ir
+ctx = ir.Context()
+ctx.allow_unregistered_dialects = True
+m = ir.Module.parse('func.func @t() { return }', ctx)
+assert m.operation.verify()
+print('✓ MLIR binding OK')
+"
+```
+
+### Bundle 故障排除
+
+如果遇到类似以下错误：
+```
+tar: This does not look like a tar archive
+tar: Skipping to next header
+tar: Exiting with failure status due to previous errors
+```
+
+请按以下步骤排查：
+
+1. **诊断文件完整性**
+   ```bash
+   ./scripts/diagnose-bundle.sh offline-bundle.tar.gz
+   ```
+
+2. **检查文件是否完整**
+   - 确认文件大小是否正常（通常 100MB-500MB）
+   - 校验和是否匹配
+
+3. **重新传输/下载文件**
+   - 使用可靠的传输工具（如 `rsync -az --checksum`)
+   - 避免网络不稳定时传输大文件
+   - 验证传输后的文件完整性
+
+4. **系统兼容性检查**
+   - 确认 tar 版本 >= 1.27（`tar --version`）
+   - 确认 gzip 可用（`gzip --version`）
+   - 在 Linux/Unix 系统上使用 bundle
+
+5. **重新生成 Bundle**
+   如果文件确实损坏，在有网络的机器上重新生成：
+   ```bash
+   ./scripts/bundle-offline.sh
+   ```
+
+详细诊断信息会在 `diagnose-bundle.sh` 输出中显示，根据提示进行相应修复。
 
 ## 自定义方言
 

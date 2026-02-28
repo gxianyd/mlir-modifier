@@ -27,6 +27,8 @@ jobs:
 
       - name: Build offline bundle
         run: ./scripts/bundle-offline.sh
+        # 注意：此脚本现在只打包前后端环境，不包含 MLIR
+        # 用户需要自行安装 MLIR Python bindings
 
       - name: Rename bundle with platform tag
         run: |
@@ -34,11 +36,64 @@ jobs:
           mv offline-bundle.tar.gz offline-bundle-linux-x86_64-${VER}.tar.gz
           echo "BUNDLE=offline-bundle-linux-x86_64-${VER}.tar.gz" >> "$GITHUB_ENV"
 
+      - name: Validate bundle file
+        run: |
+          echo "Validating bundle: ${{ env.BUNDLE }}"
+          if [ ! -f "${{ env.BUNDLE }}" ]; then
+            echo "ERROR: Bundle file not found!"
+            exit 1
+          fi
+          echo "File size: $(stat -c%s "${{ env.BUNDLE }}" 2>/dev/null || stat -f%z "${{ env.BUNDLE }}") bytes"
+          echo "File type: $(file "${{ env.BUNDLE }}")"
+          echo "First 100 bytes:"
+          head -c 100 "${{ env.BUNDLE }}" | od -A x -t x1z -v
+          echo ""
+          echo "Attempting to test extract..."
+          mkdir -p /tmp/test-extract
+          tar -tvf "${{ env.BUNDLE }}" > /dev/null && echo "✓ Bundle is a valid tar archive" || {
+            echo "✗ Invalid tar archive!"
+            exit 1
+          }
+          rm -rf /tmp/test-extract
+
+      - name: Calculate checksums
+        run: |
+          VER=$(python3 -c "import sys; print(f'py{sys.version_info.major}{sys.version_info.minor}')")
+          BUNDLE="offline-bundle-linux-x86_64-${VER}.tar.gz"
+          SHA256=$(sha256sum "$BUNDLE" | awk '{print $1}')
+          MD5=$(md5sum "$BUNDLE" | awk '{print $1}')
+          echo "SHA256=$SHA256" >> "$GITHUB_ENV"
+          echo "MD5=$MD5" >> "$GITHUB_ENV"
+          echo "SHA256 checksum: $SHA256"
+          echo "MD5 checksum: $MD5"
+
       - name: Upload to GitHub Release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload ${{ github.event.release.tag_name }} "$BUNDLE"
+        run: |
+          echo "Uploading ${{ env.BUNDLE }} to release ${{ github.event.release.tag_name }}"
+          gh release upload ${{ github.event.release.tag_name }} "${{ env.BUNDLE }}" --clobber
+          echo "Upload completed successfully"
+
+      - name: Upload checksums to GitHub Release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER=$(python3 -c "import sys; print(f'py{sys.version_info.major}{sys.version_info.minor}')")
+          BUNDLE="offline-bundle-linux-x86_64-${VER}.tar.gz"
+          cat > "${BUNDLE}.checksums.txt" << EOF
+Filename: ${BUNDLE}
+SHA256: ${{ env.SHA256 }}
+MD5: ${{ env.MD5 }}
+Size: $(stat -c%s "$BUNDLE" 2>/dev/null || stat -f%z "$BUNDLE") bytes
+Platform: Linux x86_64
+Python: ${VER}
+Type: Frontend + Backend Dependencies Only
+MLIR: Not included (user must install separately)
+EOF
+          gh release upload ${{ github.event.release.tag_name }} "${BUNDLE}.checksums.txt" --clobber
 
       - name: Upload as artifact (manual run)
         if: github.event_name == 'workflow_dispatch'
@@ -46,3 +101,10 @@ jobs:
         with:
           name: ${{ env.BUNDLE }}
           path: ${{ env.BUNDLE }}
+
+      - name: Upload checksum as artifact (manual run)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BUNDLE }}.checksums.txt
+          path: ${{ env.BUNDLE }}.checksums.txt

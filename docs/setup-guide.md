@@ -75,7 +75,7 @@ source .venv/bin/activate
 #### 2.2 安装 Python 编译依赖
 
 ```bash
-pip install nanobind numpy pybind11
+pip install nanobind pybind11
 ```
 
 > **注意**: 新版 MLIR (main 分支) 已从 pybind11 迁移到 nanobind，必须安装 nanobind。

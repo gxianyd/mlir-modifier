@@ -27,11 +27,23 @@ ok()    { echo -e "\033[32m[OK]\033[0m $*"; }
 warn()  { echo -e "\033[33m[WARN]\033[0m $*"; }
 error() { echo -e "\033[31m[ERROR]\033[0m $*"; exit 1; }
 
+# ── 路径规范化（兼容 macOS/Linux） ─────────────────────────
+# realpath -m 在 macOS 不可用，使用 python3 作为后备
+realpath_m() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # macOS: 使用 python3 实现类似 realpath -m 的功能
+        python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "$1"
+    else
+        # Linux: 原生 realpath
+        realpath -m "$1"
+    fi
+}
+
 # ── 默认值 ──────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LLVM_DIR="$(realpath -m "${SCRIPT_DIR}/../llvm-project")"
+LLVM_DIR="$(realpath_m "${SCRIPT_DIR}/../llvm-project")"
 LLVM_TAG="llvmorg-19.1.7"      # 经过验证的稳定版本；覆盖: --llvm-tag main
-JOBS="$(nproc)"
+JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 CC_BIN=""
 CXX_BIN=""
 LIBSTDCXX_DIR=""
@@ -46,7 +58,7 @@ OFFLINE_BUNDLE=""
 # ── 参数解析 ─────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --llvm-dir)      LLVM_DIR="$(realpath -m "$2")"; shift 2 ;;
+        --llvm-dir)      LLVM_DIR="$(realpath_m "$2")"; shift 2 ;;
         --llvm-tag)      LLVM_TAG="$2";         shift 2 ;;
         --jobs)          JOBS="$2";             shift 2 ;;
         --cc)            CC_BIN="$2";           shift 2 ;;
@@ -75,18 +87,44 @@ MLIR_BINDING="${LLVM_DIR}/build/tools/mlir/python_packages/mlir_core"
 OFFLINE_DIR=""
 if [[ -n "$OFFLINE_BUNDLE" ]]; then
     [[ -e "$OFFLINE_BUNDLE" ]] || error "离线包不存在: ${OFFLINE_BUNDLE}"
+
+    # 验证文件完整性
+    info "验证离线包: ${OFFLINE_BUNDLE}"
+    BUNDLE_SIZE=$(stat -f%z "$OFFLINE_BUNDLE" 2>/dev/null || stat -c%s "$OFFLINE_BUNDLE" 2>/dev/null)
+    info "文件大小: ${BUNDLE_SIZE} bytes"
+
     OFFLINE_DIR="${SCRIPT_DIR}/.offline-bundle-extracted"
     rm -rf "$OFFLINE_DIR" && mkdir -p "$OFFLINE_DIR"
+
     if [[ -f "$OFFLINE_BUNDLE" && "$OFFLINE_BUNDLE" == *.tar.gz ]]; then
-        tar -xzf "$OFFLINE_BUNDLE" -C "$OFFLINE_DIR" --strip-components=1
+        info "解压离线包..."
+        tar -xvf "$OFFLINE_BUNDLE" -C "$OFFLINE_DIR" --strip-components=1 || {
+            error "解压失败。可能原因：
+            1. 文件传输不完整（检查文件大小）
+            2. 文件损坏（重新下载）
+            3. tar 版本过旧（要求 >= 1.27）
+
+            诊断信息：
+            - tar 版本: $(tar --version | head -1)
+            - 文件类型: $(file "$OFFLINE_BUNDLE" 2>/dev/null || echo ' Unknown')"
+        }
     elif [[ -d "$OFFLINE_BUNDLE" ]]; then
         cp -r "$OFFLINE_BUNDLE/." "$OFFLINE_DIR/"
     else
-        error "离线包格式不支持（需要 .tar.gz 或目录）: ${OFFLINE_BUNDLE}"
+        error "离线包格式不支持（需要 .tar 或目录）: ${OFFLINE_BUNDLE}"
     fi
     info "离线包已解压: ${OFFLINE_DIR}"
-    [[ -f "${OFFLINE_DIR}/bundle-info.json" ]] && \
-        info "bundle 信息: $(cat "${OFFLINE_DIR}/bundle-info.json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("platform","?"))')"
+
+    # 验证解压后的内容
+    if [[ ! -d "${OFFLINE_DIR}/wheels" ]] && [[ ! -f "${OFFLINE_DIR}/node_modules.tar.gz" ]]; then
+        warn "离线包内容异常：缺少 wheels 和 node_modules"
+    fi
+
+    # 显示 bundle 信息
+    if [[ -f "${OFFLINE_DIR}/bundle-info.json" ]]; then
+        BUNDLE_INFO=$(cat "${OFFLINE_DIR}/bundle-info.json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(f"Platform: {d.get(\"platform\",\"?\")}, Arch: {d.get(\"arch\",\"?\")}, Python: {d.get(\"python_version\",\"?\")}")')
+        info "bundle 信息: ${BUNDLE_INFO}"
+    fi
 fi
 
 echo ""
@@ -159,9 +197,9 @@ info "[1/4] 配置 Python 虚拟环境..."
 [[ -d "$VENV_DIR" ]] || python3 -m venv "$VENV_DIR"
 source "${VENV_DIR}/bin/activate"
 if [[ -n "$OFFLINE_DIR" && -d "${OFFLINE_DIR}/wheels" ]]; then
-    pip install --quiet --no-index --find-links="${OFFLINE_DIR}/wheels" nanobind numpy pybind11
+    pip install --quiet --no-index --find-links="${OFFLINE_DIR}/wheels" nanobind pybind11
 else
-    pip install --quiet nanobind numpy pybind11
+    pip install --quiet nanobind pybind11
 fi
 
 ok "虚拟环境就绪: ${VENV_DIR}"
