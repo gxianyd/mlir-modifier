@@ -233,45 +233,50 @@ export default function OpCreator({ visible, onClose, onCreateOp, graph, viewPat
         {/* Signature-driven form */}
         {signature && (
           <>
-            {/* Result types */}
-            {signature.num_results !== 0 && (
-              <div>
-                <label style={labelStyle}>
-                  Result Types
-                  {signature.num_results === -1 && (
-                    <Tag color="blue" style={{ marginLeft: 8, fontSize: 10 }}>variadic</Tag>
-                  )}
-                </label>
-                {resultTypes.map((t, i) => (
-                  <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
-                    <TypePicker
-                      value={t}
-                      onChange={(newType) => {
-                        const updated = [...resultTypes];
-                        updated[i] = newType;
-                        setResultTypes(updated);
-                      }}
-                    />
-                    {signature.num_results === -1 && resultTypes.length > 1 && (
-                      <Button
-                        size="small"
-                        icon={<MinusCircleOutlined />}
-                        onClick={() => setResultTypes(resultTypes.filter((_, j) => j !== i))}
-                      />
-                    )}
-                  </div>
-                ))}
+            {/* Result types — always shown.
+                num_results > 0: fixed count, no add/remove.
+                num_results === -1: variadic, add/remove, keep ≥1.
+                num_results === 0: unknown (no registered Python binding),
+                  treat as optional — allow adding result types freely. */}
+            <div>
+              <label style={labelStyle}>
+                Result Types
                 {signature.num_results === -1 && (
-                  <Button
-                    size="small"
-                    icon={<PlusOutlined />}
-                    onClick={() => setResultTypes([...resultTypes, 'f32'])}
-                  >
-                    Add result type
-                  </Button>
+                  <Tag color="blue" style={{ marginLeft: 8, fontSize: 10 }}>variadic</Tag>
                 )}
-              </div>
-            )}
+                {signature.num_results === 0 && (
+                  <Tag color="default" style={{ marginLeft: 8, fontSize: 10 }}>optional</Tag>
+                )}
+              </label>
+              {resultTypes.map((t, i) => (
+                <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                  <TypePicker
+                    value={t}
+                    onChange={(newType) => {
+                      const updated = [...resultTypes];
+                      updated[i] = newType;
+                      setResultTypes(updated);
+                    }}
+                  />
+                  {(signature.num_results === -1 || signature.num_results === 0) && (
+                    <Button
+                      size="small"
+                      icon={<MinusCircleOutlined />}
+                      onClick={() => setResultTypes(resultTypes.filter((_, j) => j !== i))}
+                    />
+                  )}
+                </div>
+              ))}
+              {(signature.num_results === -1 || signature.num_results === 0) && (
+                <Button
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={() => setResultTypes([...resultTypes, 'f32'])}
+                >
+                  Add result type
+                </Button>
+              )}
+            </div>
 
             {/* Operand parameters */}
             {operandParams.length > 0 && (

@@ -184,6 +184,28 @@ def get_op_signature(op_name: str) -> OpSignature | None:
     if num_results == 0 and has_result_keyword:
         num_results = -1  # variadic
 
+    # Fallback: if no result was found via __init__ inspection, count class-defined
+    # property descriptors that access operation.results.  This covers:
+    #   - Type-inferred ops (e.g. arith.addf) whose __init__ has no 'result' param
+    #     because the result type is inferred from operands at build time.
+    #   - Ops whose result param is named 'output' or other non-standard names.
+    # We scan cls.__dict__ directly (not dir(cls)) to avoid OpView base members,
+    # and only consider property objects whose source accesses 'operation.results'.
+    if num_results == 0 and not has_result_keyword:
+        result_prop_count = 0
+        for key, desc in cls.__dict__.items():
+            if key.startswith("_"):
+                continue
+            if isinstance(desc, property):
+                try:
+                    src = inspect.getsource(desc.fget)
+                    if "operation.results" in src:
+                        result_prop_count += 1
+                except (OSError, TypeError):
+                    pass
+        if result_prop_count > 0:
+            num_results = result_prop_count
+
     # Extract region count from _ODS_REGIONS
     ods_regions = getattr(cls, "_ODS_REGIONS", (0, True))
     num_regions = ods_regions[0] if isinstance(ods_regions, tuple) else 0
