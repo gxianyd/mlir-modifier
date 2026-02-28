@@ -148,6 +148,22 @@ def get_op_signature(op_name: str) -> OpSignature | None:
     except (ValueError, TypeError):
         return OpSignature(op_name=op_name)
 
+    # Step 1: Identify class-level property names whose getter accesses
+    # operation.results.  These are result descriptors (may have non-standard
+    # names like 'output' instead of 'result').  We scan cls.__dict__ directly
+    # to include overrides of base-class names (e.g. 'result').
+    result_prop_names: set[str] = set()
+    for key, desc in cls.__dict__.items():
+        if key.startswith("_"):
+            continue
+        if isinstance(desc, property):
+            try:
+                src = inspect.getsource(desc.fget)
+                if "operation.results" in src:
+                    result_prop_names.add(key)
+            except (OSError, TypeError):
+                pass
+
     params: list[OpParamInfo] = []
     num_results = 0
     has_result_keyword = False
@@ -162,7 +178,7 @@ def get_op_signature(op_name: str) -> OpSignature | None:
         )
         is_keyword = param.kind == inspect.Parameter.KEYWORD_ONLY
 
-        # 'result' as positional → means 1 result type needed
+        # 'result' as positional → means 1 result type needed (standard ODS naming)
         if pname == "result" and is_positional:
             num_results = 1
             continue
@@ -170,6 +186,13 @@ def get_op_signature(op_name: str) -> OpSignature | None:
         # 'results' or 'results_' as keyword → variadic results
         if pname in ("results", "results_"):
             has_result_keyword = True
+            continue
+
+        # Positional param whose name matches a class property accessing
+        # operation.results → it is a result TYPE parameter (e.g. 'output' in
+        # hbir ops).  Count it as a result and skip adding to params.
+        if is_positional and pname in result_prop_names:
+            num_results += 1
             continue
 
         # Classify the parameter
@@ -184,27 +207,11 @@ def get_op_signature(op_name: str) -> OpSignature | None:
     if num_results == 0 and has_result_keyword:
         num_results = -1  # variadic
 
-    # Fallback: if no result was found via __init__ inspection, count class-defined
-    # property descriptors that access operation.results.  This covers:
-    #   - Type-inferred ops (e.g. arith.addf) whose __init__ has no 'result' param
-    #     because the result type is inferred from operands at build time.
-    #   - Ops whose result param is named 'output' or other non-standard names.
-    # We scan cls.__dict__ directly (not dir(cls)) to avoid OpView base members,
-    # and only consider property objects whose source accesses 'operation.results'.
-    if num_results == 0 and not has_result_keyword:
-        result_prop_count = 0
-        for key, desc in cls.__dict__.items():
-            if key.startswith("_"):
-                continue
-            if isinstance(desc, property):
-                try:
-                    src = inspect.getsource(desc.fget)
-                    if "operation.results" in src:
-                        result_prop_count += 1
-                except (OSError, TypeError):
-                    pass
-        if result_prop_count > 0:
-            num_results = result_prop_count
+    # Fallback: if no result was found via __init__ inspection (type-inferred ops
+    # like arith.addf where result type equals operand type and is not a param),
+    # use the count of result-accessing class properties collected in Step 1.
+    if num_results == 0 and not has_result_keyword and result_prop_names:
+        num_results = len(result_prop_names)
 
     # Extract region count from _ODS_REGIONS
     ods_regions = getattr(cls, "_ODS_REGIONS", (0, True))
