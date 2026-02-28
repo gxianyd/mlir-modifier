@@ -807,6 +807,30 @@ class IRManager:
                             value=str(attr_val),
                         )
 
+                    # Also collect MLIR properties (the <{...}> syntax in the generic
+                    # op format).  This Python binding version does not expose
+                    # properties through op.attributes; instead, they appear as typed
+                    # descriptors on the dialect-specific OpView subclass.
+                    # We enumerate the class-specific members of the OpView and keep
+                    # those whose value is an ir.Attribute (properties/attributes),
+                    # skipping ir.Value members (operands/results).
+                    opview = child_op.opview
+                    base_members = set(dir(ir.OpView))
+                    for key in type(opview).__dict__:
+                        if key.startswith("_") or key == "OPERATION_NAME":
+                            continue
+                        if key in base_members or key in attrs:
+                            continue
+                        try:
+                            val = getattr(opview, key)
+                        except Exception:
+                            continue
+                        if isinstance(val, ir.Attribute):
+                            attrs[key] = AttributeInfo(
+                                type=type(val).__name__,
+                                value=str(val),
+                            )
+
                     # Determine dialect name
                     op_name = child_op.name
                     dialect = op_name.split(".")[0] if "." in op_name else ""
