@@ -33,11 +33,19 @@ class IRManager:
         self._id_counters: dict[str, int] = {}
 
     def load(self, mlir_text: str) -> IRGraph:
-        """Parse MLIR text and return the structured IR graph."""
+        """Parse MLIR text and return the structured IR graph.
+
+        Loads all available dialects to enable proper validation while
+        still allowing unregistered dialects for custom operations.
+        """
 
         self._clear_maps()
         self.history.clear()
         self.context = ir.Context()
+        # Load all available dialects to enable proper validation
+        self.context.load_all_available_dialects()
+        # Keep allow_unregistered_dialects enabled for custom dialects
+        # but loaded dialects will still be validated
         self.context.allow_unregistered_dialects = True
         self.module = ir.Module.parse(mlir_text, self.context)
         return self._build_graph()
@@ -581,14 +589,79 @@ class IRManager:
         func_op.attributes["function_type"] = ir.TypeAttr.get(new_ft, self.context)
 
     def validate(self) -> tuple[bool, list[str]]:
-        """Verify the current module and return (valid, diagnostics)."""
+        """Verify the current module and return (valid, diagnostics).
+
+        Uses DiagnosticHandler to capture detailed verification messages,
+        then runs Python-level checks for unregistered dialect ops.
+        Returns (False, diagnostics) if verification fails or raises an error.
+        """
         if self.module is None:
             return (False, ["No module loaded"])
+
+        diagnostics: list[str] = []
+
+        def handler(diag) -> bool:
+            """Append diagnostic message to the list.
+
+            Returns True to indicate the handler handled the diagnostic,
+            which is the expected return value for DiagnosticHandler.
+            """
+            severity = diag.severity.upper()
+            message = diag.message
+            diagnostics.append(f"{severity}: {message}")
+            return True
+
         try:
-            valid = self.module.operation.verify()
-            return (valid, [])
-        except Exception as e:
-            return (False, [str(e)])
+            with self.context.attach_diagnostic_handler(handler):
+                valid = self.module.operation.verify()
+        except ir.MLIRError:
+            valid = False
+
+        # Python-level checks for unregistered ops (e.g. hbir)
+        py_diags = self._validate_unregistered_ops()
+        if py_diags:
+            diagnostics.extend(py_diags)
+            valid = False
+
+        return (valid, diagnostics)
+
+    def _validate_unregistered_ops(self) -> list[str]:
+        """Check operand/result counts for ops whose dialect has no C++ verifier.
+
+        Uses dialect_registry.get_op_signature() to get expected counts from
+        the Python OpView class, then compares with actual op state.
+        """
+        from app.services.dialect_registry import get_op_signature
+
+        diagnostics: list[str] = []
+        for op_id, op in self._op_map.items():
+            # Skip ops whose dialect IS registered (already verified by C++)
+            if self.context.is_registered_operation(op.name):
+                continue
+
+            sig = get_op_signature(op.name)
+            if sig is None:
+                continue  # no Python binding either, can't check
+
+            # Check operand count
+            expected_operands = sum(
+                1 for p in sig.params if p.kind == "operand" and p.required
+            )
+            actual_operands = len(list(op.operands))
+            if actual_operands < expected_operands:
+                diagnostics.append(
+                    f"WARNING: {op.name} ({op_id}): expected at least "
+                    f"{expected_operands} operands, got {actual_operands}"
+                )
+
+            # Check result count (skip variadic / unknown)
+            if sig.num_results > 0 and len(list(op.results)) != sig.num_results:
+                diagnostics.append(
+                    f"WARNING: {op.name} ({op_id}): expected "
+                    f"{sig.num_results} results, got {len(list(op.results))}"
+                )
+
+        return diagnostics
 
     # --- Private helpers ---
 

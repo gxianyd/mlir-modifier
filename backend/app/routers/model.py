@@ -1,7 +1,6 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import PlainTextResponse
 
-from app.models.ir_schema import IRGraph
+from app.models.ir_schema import IRGraph, SaveResponse
 from app.services.ir_manager import IRManager
 
 router = APIRouter()
@@ -22,11 +21,12 @@ async def load_model(file: UploadFile = File(...)):
     return graph
 
 
-@router.post("/model/save")
+@router.post("/model/save", response_model=SaveResponse)
 async def save_model():
-    """Serialize the current module to MLIR text."""
+    """Serialize the current module to MLIR text and validate it."""
     try:
         text = ir_manager.get_module_text()
+        valid, diagnostics = ir_manager.validate()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return PlainTextResponse(content=text, media_type="text/plain")
+    return SaveResponse(mlir_text=text, valid=valid, diagnostics=diagnostics)

@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
-import { message } from 'antd';
+import { message, Modal } from 'antd';
 import Toolbar from './components/Toolbar/Toolbar';
 import Breadcrumb from './components/Toolbar/Breadcrumb';
 import GraphView from './components/Graph/GraphView';
@@ -9,7 +9,7 @@ import OpCreator from './components/OpCreator/OpCreator';
 import { loadModel, saveModel, modifyAttributes, deleteOp, deleteOpSingle, undo as apiUndo, redo as apiRedo, getHistoryStatus, createOp, setOperand, removeOperand, addOperand, addToOutput, type CreateOpRequest } from './services/api';
 import useValidation from './hooks/useValidation';
 import useKeyboardShortcuts from './hooks/useKeyboardShortcuts';
-import type { IRGraph, OperationInfo } from './types/ir';
+import type { IRGraph, OperationInfo, SaveResponse } from './types/ir';
 
 /**
  * Extract all top-level func.func operations from the graph.
@@ -261,18 +261,31 @@ function App() {
   // ── Save: download current module as .mlir file ──
   const handleSave = useCallback(async () => {
     try {
-      const text = await saveModel();
-      const blob = new Blob([text], { type: 'text/plain' });
+      const result = await saveModel();
+
+      // Check validation status
+      if (!result.valid) {
+        const confirmed = await Modal.confirm({
+          title: '模型验证失败',
+          content: `当前 MLIR 模型不合法，可能存在问题：\n${result.diagnostics.join('\n')}\n\n是否仍要保存文件？`,
+          okText: '仍然保存',
+          cancelText: '取消',
+        });
+        if (!confirmed) return;
+      }
+
+      // Download the file
+      const blob = new Blob([result.mlir_text], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = 'model.mlir';
       a.click();
       URL.revokeObjectURL(url);
-      message.success('Saved model.mlir');
+      message.success('已保存 model.mlir');
     } catch (err: unknown) {
       const detail = err instanceof Error ? err.message : String(err);
-      message.error(`Failed to save: ${detail}`);
+      message.error(`保存失败: ${detail}`);
     }
   }, []);
 

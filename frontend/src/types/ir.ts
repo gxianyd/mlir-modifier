@@ -57,3 +57,9 @@ export interface EditResponse {
   valid: boolean;
   diagnostics: string[];
 }
+
+export interface SaveResponse {
+  mlir_text: string;
+  valid: boolean;
+  diagnostics: string[];
+}

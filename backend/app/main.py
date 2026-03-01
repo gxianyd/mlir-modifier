@@ -1,3 +1,7 @@
+# Import MLIR dialect modules at startup so they get registered
+# This must happen before any Context is created
+import app.services.dialect_registry as _dialect_registry
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

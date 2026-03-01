@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { IRGraph, EditResponse, HistoryStatus } from '../types/ir';
+import type { IRGraph, EditResponse, HistoryStatus, SaveResponse } from '../types/ir';
 
 const api = axios.create({
   baseURL: 'http://localhost:8000/api',
@@ -12,10 +12,8 @@ export async function loadModel(file: File): Promise<IRGraph> {
   return response.data;
 }
 
-export async function saveModel(): Promise<string> {
-  const response = await api.post('/model/save', null, {
-    responseType: 'text',
-  });
+export async function saveModel(): Promise<SaveResponse> {
+  const response = await api.post<SaveResponse>('/model/save');
   return response.data;
 }
 

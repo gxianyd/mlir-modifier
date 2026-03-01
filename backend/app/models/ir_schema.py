@@ -111,3 +111,9 @@ class OpSignatureResponse(BaseModel):
     params: list[OpParamInfoResponse] = []
     num_results: int = 0   # -1 means variadic
     num_regions: int = 0
+
+
+class SaveResponse(BaseModel):
+    mlir_text: str
+    valid: bool
+    diagnostics: list[str] = []
