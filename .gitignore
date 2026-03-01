@@ -27,6 +27,9 @@ Thumbs.db
 # LLVM build (not part of this repo)
 llvm-project/
 
+# Local dialect config (per-machine customization)
+backend/app/services/local_dialects.py
+
 # Agent memory, plans, and local dev context (not part of repo)
 .mem/
 .claude/

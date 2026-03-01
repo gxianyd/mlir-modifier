@@ -65,14 +65,25 @@ _BUILTIN_DIALECT_MODULES: list[str] = [
 ]
 
 
+def _get_all_dialect_modules() -> list[str]:
+    """Return built-in dialects plus any local additions."""
+    try:
+        from app.services.local_dialects import LOCAL_DIALECT_MODULES
+    except ImportError:
+        LOCAL_DIALECT_MODULES = []
+    seen = set(_BUILTIN_DIALECT_MODULES)
+    extra = [d for d in LOCAL_DIALECT_MODULES if d not in seen]
+    return _BUILTIN_DIALECT_MODULES + extra
+
+
 def _load_builtin_dialects() -> None:
-    """Import all builtin dialect modules to ensure they are registered.
+    """Import all dialect modules to ensure they are registered.
 
     This function should be called at application startup, before any
     MLIR Context is created, so that the dialects are available for
     parsing and validation.
     """
-    for dialect_name in _BUILTIN_DIALECT_MODULES:
+    for dialect_name in _get_all_dialect_modules():
         try:
             importlib.import_module(f"mlir.dialects.{dialect_name}")
         except ImportError:
@@ -86,7 +97,7 @@ _load_builtin_dialects()
 def list_dialects() -> list[str]:
     """Return the list of known dialect names (those with Python bindings)."""
     available: list[str] = []
-    for name in _BUILTIN_DIALECT_MODULES:
+    for name in _get_all_dialect_modules():
         try:
             importlib.import_module(f"mlir.dialects.{name}")
             available.append(name)
