@@ -4,9 +4,13 @@ import type {
   OperationInfo,
   BlockInfo,
   RegionInfo,
+  NodeGroup,
+  GroupDisplayMode,
 } from '../../types/ir';
 import type { OpNodeData } from './OpNode';
 import type { InputNodeData } from './InputNode';
+import type { GroupNodeData } from './GroupNode';
+import { getGroupColor } from './groupUtils';
 
 /**
  * Default maximum nesting depth for inline expansion.
@@ -15,6 +19,14 @@ import type { InputNodeData } from './InputNode';
  * Higher values expand nested regions inline as flat sibling cards.
  */
 const DEFAULT_MAX_EXPAND_DEPTH = 0;
+
+// ─── Group handler callbacks ───────────────────────────────────────
+
+export interface GroupHandlers {
+  onRename: (groupId: string, newName: string) => void;
+  onUngroup: (groupId: string) => void;
+  onSetMode: (groupId: string, mode: GroupDisplayMode) => void;
+}
 
 // ─── Lookup helpers ────────────────────────────────────────────────
 
@@ -112,6 +124,11 @@ function getViewRootRegionIds(
  * @param lookups        Pre-built lookup maps
  * @param nodes          Output array — nodes are pushed here
  * @param visibleOpIds   Output set — tracks which ops are visible (for edge filtering)
+ * @param collapsedGroupByOp  Map from opId → collapsed group (skip op, render group node once)
+ * @param inlineGroupByOp     Map from opId → inline group (add groupColor to data)
+ * @param renderedGroupIds    Set of group IDs already rendered (prevents duplicates)
+ * @param groupHandlers       Callbacks for group node actions
+ * @param visibleGroupIds     Output set — tracks rendered group node IDs
  */
 function walkRegions(
   regionIds: string[],
@@ -122,6 +139,11 @@ function walkRegions(
   visibleOpIds: Set<string>,
   visibleInputNodeIds: Set<string>,
   hiddenOpNames?: Set<string>,
+  collapsedGroupByOp?: Map<string, NodeGroup>,
+  inlineGroupByOp?: Map<string, NodeGroup>,
+  renderedGroupIds?: Set<string>,
+  groupHandlers?: GroupHandlers,
+  visibleGroupIds?: Set<string>,
 ): void {
   const { opMap, blockMap, regionMap, blockArgNodeMap } = lookups;
 
@@ -160,6 +182,40 @@ function walkRegions(
         // Skip ops whose name is in the hidden set
         if (hiddenOpNames?.has(op.name)) continue;
 
+        // ── Collapsed group: replace this op with its group node ──
+        if (collapsedGroupByOp?.has(opId)) {
+          const group = collapsedGroupByOp.get(opId)!;
+          if (!renderedGroupIds?.has(group.id)) {
+            renderedGroupIds?.add(group.id);
+            const color = getGroupColor(group.id);
+            const groupNodeData: GroupNodeData = {
+              groupId: group.id,
+              name: group.name,
+              color,
+              inputs: group.inputs,
+              outputs: group.outputs,
+              // Dummy operands/results for ELK port building
+              operands: group.inputs.map((inp) => ({ value_id: inp.valueId, type: inp.type })),
+              results: group.outputs.map((out) => ({ value_id: out.valueId, type: out.type })),
+              onRename: groupHandlers?.onRename ?? (() => {}),
+              onUngroup: groupHandlers?.onUngroup ?? (() => {}),
+              onSetMode: groupHandlers?.onSetMode ?? (() => {}),
+            };
+            nodes.push({
+              id: group.id,
+              type: 'groupNode',
+              data: groupNodeData,
+              position: { x: 0, y: 0 },
+            });
+            visibleGroupIds?.add(group.id);
+          }
+          continue; // Skip the individual op
+        }
+
+        // ── Inline group: add groupColor to node data ──
+        const inlineGroup = inlineGroupByOp?.get(opId);
+        const groupColor = inlineGroup ? getGroupColor(inlineGroup.id) : undefined;
+
         const hasRegions = op.regions.length > 0;
 
         if (hasRegions && depth <= maxExpandDepth) {
@@ -173,6 +229,7 @@ function walkRegions(
             operands: op.operands,
             results: op.results,
             hasRegions: true,
+            ...(groupColor ? { groupColor } : {}),
           };
 
           nodes.push({
@@ -193,6 +250,11 @@ function walkRegions(
             visibleOpIds,
             visibleInputNodeIds,
             hiddenOpNames,
+            collapsedGroupByOp,
+            inlineGroupByOp,
+            renderedGroupIds,
+            groupHandlers,
+            visibleGroupIds,
           );
         } else if (hasRegions && depth > maxExpandDepth) {
           // ── Collapsed op (depth exceeds threshold) ──
@@ -207,6 +269,7 @@ function walkRegions(
             hasRegions: true,
             collapsed: true,
             regionCount: op.regions.length,
+            ...(groupColor ? { groupColor } : {}),
           };
 
           nodes.push({
@@ -226,6 +289,7 @@ function walkRegions(
             operands: op.operands,
             results: op.results,
             hasRegions: false,
+            ...(groupColor ? { groupColor } : {}),
           };
 
           nodes.push({
@@ -246,39 +310,71 @@ function walkRegions(
 /**
  * Generate data-flow edges between visible nodes.
  *
- * For each visible op, iterate its operands:
- *   - If the operand is produced by another visible op → edge from that op
- *   - If the operand is a block argument with a visible input node → edge from input node
+ * Handles three kinds of connections:
+ *   1. Regular op → regular op (both visible)
+ *   2. Input node → regular op
+ *   3. Op/input node → collapsed group node (redirected through group input handles)
+ *   4. Collapsed group node → regular op (redirected through group output handles)
  */
 function generateEdges(
   visibleOpIds: Set<string>,
   visibleInputNodeIds: Set<string>,
+  visibleGroupIds: Set<string>,
   lookups: ReturnType<typeof buildLookups>,
+  collapsedGroupByOp: Map<string, NodeGroup>,
+  collapsedGroupsMap: Map<string, NodeGroup>,
 ): Edge[] {
   const edges: Edge[] = [];
   const { opMap, valueProducerMap, blockArgNodeMap } = lookups;
 
+  // ── Edges for regular visible ops ──
   for (const opId of visibleOpIds) {
     const op = opMap.get(opId);
     if (!op) continue;
 
     op.operands.forEach((operand, operandIdx) => {
       const producer = valueProducerMap.get(operand.value_id);
-      if (producer && visibleOpIds.has(producer.opId)) {
-        // Edge from a producing op's result
-        edges.push({
-          id: `edge-${operand.value_id}-${op.op_id}-${operandIdx}`,
-          source: producer.opId,
-          sourceHandle: `out-${producer.resultIndex}`,
-          target: op.op_id,
-          targetHandle: `in-${operandIdx}`,
-          label: operand.type,
-          style: { stroke: '#888' },
-          labelStyle: { fontSize: 10, fill: '#aaa' },
-          deletable: true,
-          data: { valueId: operand.value_id, toOp: op.op_id, toOperandIndex: operandIdx },
-        });
-        return;
+
+      if (producer) {
+        if (visibleOpIds.has(producer.opId)) {
+          // Normal op → op edge
+          edges.push({
+            id: `edge-${operand.value_id}-${op.op_id}-${operandIdx}`,
+            source: producer.opId,
+            sourceHandle: `out-${producer.resultIndex}`,
+            target: op.op_id,
+            targetHandle: `in-${operandIdx}`,
+            label: operand.type,
+            style: { stroke: '#888' },
+            labelStyle: { fontSize: 10, fill: '#aaa' },
+            deletable: true,
+            data: { valueId: operand.value_id, toOp: op.op_id, toOperandIndex: operandIdx },
+          });
+          return;
+        }
+
+        // Producer is inside a collapsed group → source = group node
+        const producerGroup = collapsedGroupByOp.get(producer.opId);
+        if (producerGroup && visibleGroupIds.has(producerGroup.id)) {
+          const outputIdx = producerGroup.outputs.findIndex(
+            (o) => o.valueId === operand.value_id,
+          );
+          if (outputIdx >= 0) {
+            edges.push({
+              id: `edge-${operand.value_id}-${op.op_id}-${operandIdx}`,
+              source: producerGroup.id,
+              sourceHandle: `out-${outputIdx}`,
+              target: op.op_id,
+              targetHandle: `in-${operandIdx}`,
+              label: operand.type,
+              style: { stroke: '#888' },
+              labelStyle: { fontSize: 10, fill: '#aaa' },
+              deletable: false,
+              data: { valueId: operand.value_id, toOp: op.op_id, toOperandIndex: operandIdx },
+            });
+          }
+          return;
+        }
       }
 
       // Check if the operand comes from a block argument input node
@@ -295,6 +391,73 @@ function generateEdges(
           labelStyle: { fontSize: 10, fill: '#91d5ff' },
           deletable: true,
           data: { valueId: operand.value_id, toOp: op.op_id, toOperandIndex: operandIdx },
+        });
+      }
+    });
+  }
+
+  // ── Edges INTO collapsed group nodes (group inputs) ──
+  for (const groupId of visibleGroupIds) {
+    const group = collapsedGroupsMap.get(groupId);
+    if (!group) continue;
+
+    group.inputs.forEach((inp, inputIdx) => {
+      const producer = valueProducerMap.get(inp.valueId);
+
+      if (producer && visibleOpIds.has(producer.opId)) {
+        // Regular op produces this group input
+        edges.push({
+          id: `edge-${inp.valueId}-${group.id}-${inputIdx}`,
+          source: producer.opId,
+          sourceHandle: `out-${producer.resultIndex}`,
+          target: group.id,
+          targetHandle: `in-${inputIdx}`,
+          label: inp.type,
+          style: { stroke: '#888' },
+          labelStyle: { fontSize: 10, fill: '#aaa' },
+          deletable: false,
+          data: { valueId: inp.valueId, toOp: group.id, toOperandIndex: inputIdx },
+        });
+        return;
+      }
+
+      // Check if producer is another visible group node
+      if (producer) {
+        const producerGroup = collapsedGroupByOp.get(producer.opId);
+        if (producerGroup && visibleGroupIds.has(producerGroup.id) && producerGroup.id !== groupId) {
+          const outputIdx = producerGroup.outputs.findIndex((o) => o.valueId === inp.valueId);
+          if (outputIdx >= 0) {
+            edges.push({
+              id: `edge-${inp.valueId}-${group.id}-${inputIdx}`,
+              source: producerGroup.id,
+              sourceHandle: `out-${outputIdx}`,
+              target: group.id,
+              targetHandle: `in-${inputIdx}`,
+              label: inp.type,
+              style: { stroke: '#888' },
+              labelStyle: { fontSize: 10, fill: '#aaa' },
+              deletable: false,
+              data: { valueId: inp.valueId, toOp: group.id, toOperandIndex: inputIdx },
+            });
+          }
+          return;
+        }
+      }
+
+      // Check if input comes from a block argument
+      const inputNodeId = blockArgNodeMap.get(inp.valueId);
+      if (inputNodeId && visibleInputNodeIds.has(inputNodeId)) {
+        edges.push({
+          id: `edge-${inp.valueId}-${group.id}-${inputIdx}`,
+          source: inputNodeId,
+          sourceHandle: 'out-0',
+          target: group.id,
+          targetHandle: `in-${inputIdx}`,
+          label: inp.type,
+          style: { stroke: '#1890ff' },
+          labelStyle: { fontSize: 10, fill: '#91d5ff' },
+          deletable: false,
+          data: { valueId: inp.valueId, toOp: group.id, toOperandIndex: inputIdx },
         });
       }
     });
@@ -320,8 +483,12 @@ function generateEdges(
  *                        The last element is the "view root" whose regions are rendered.
  *                        Example: ['op_module'] for top-level, or
  *                                 ['op_module', 'op_func', 'op_for'] after drilling into scf.for
- * @param maxExpandDepth  How many levels of nesting to expand inline (default: 1).
+ * @param maxExpandDepth  How many levels of nesting to expand inline (default: 0).
  *                        Ops with regions at depth > this are collapsed.
+ * @param hiddenOpNames   Set of op names to hide from the graph
+ * @param nodeGroups      List of user-defined node groups to apply
+ * @param activeDrillGroupId  If set, render only the ops inside this group (drilldown mode)
+ * @param groupHandlers   Callbacks for group node rename/ungroup/setMode actions
  * @returns               React Flow nodes and edges ready for rendering
  */
 export function irToFlow(
@@ -329,6 +496,9 @@ export function irToFlow(
   viewPath: string[],
   maxExpandDepth: number = DEFAULT_MAX_EXPAND_DEPTH,
   hiddenOpNames?: Set<string>,
+  nodeGroups?: NodeGroup[],
+  activeDrillGroupId?: string | null,
+  groupHandlers?: GroupHandlers,
 ): { nodes: Node[]; edges: Edge[] } {
   // Build O(1) lookup maps from the flat arrays
   const lookups = buildLookups(graph);
@@ -341,15 +511,92 @@ export function irToFlow(
     return { nodes: [], edges: [] };
   }
 
+  // ── Build group lookup maps ──
+  const collapsedGroupByOp = new Map<string, NodeGroup>();
+  const inlineGroupByOp = new Map<string, NodeGroup>();
+  const collapsedGroupsMap = new Map<string, NodeGroup>();
+
+  for (const group of nodeGroups ?? []) {
+    // In drilldown mode: ignore all group rendering (show raw ops in the group)
+    if (activeDrillGroupId) continue;
+
+    if (group.displayMode === 'collapsed') {
+      collapsedGroupsMap.set(group.id, group);
+      for (const opId of group.opIds) {
+        collapsedGroupByOp.set(opId, group);
+      }
+    } else if (group.displayMode === 'expanded') {
+      for (const opId of group.opIds) {
+        inlineGroupByOp.set(opId, group);
+      }
+    }
+    // 'drilldown' mode: handled by activeDrillGroupId above
+  }
+
   const nodes: Node[] = [];
   const visibleOpIds = new Set<string>();
   const visibleInputNodeIds = new Set<string>();
+  const visibleGroupIds = new Set<string>();
+  const renderedGroupIds = new Set<string>();
 
   // Recursively generate nodes, starting at depth=1
-  walkRegions(regionIds, 1, maxExpandDepth, lookups, nodes, visibleOpIds, visibleInputNodeIds, hiddenOpNames);
+  walkRegions(
+    regionIds, 1, maxExpandDepth, lookups,
+    nodes, visibleOpIds, visibleInputNodeIds,
+    hiddenOpNames,
+    collapsedGroupByOp, inlineGroupByOp, renderedGroupIds,
+    groupHandlers, visibleGroupIds,
+  );
+
+  // ── Drilldown mode: filter to active group's ops only ──
+  if (activeDrillGroupId) {
+    const activeGroup = (nodeGroups ?? []).find((g) => g.id === activeDrillGroupId);
+    if (activeGroup) {
+      const groupOpSet = new Set(activeGroup.opIds);
+
+      // Filter out ops not in the group
+      const filteredNodes = nodes.filter((n) => {
+        if (n.type === 'opNode') return groupOpSet.has(n.id);
+        if (n.type === 'inputNode') {
+          // Keep only input nodes consumed by group ops
+          const valueId = (n.data as InputNodeData).valueId;
+          return activeGroup.inputs.some((inp) => inp.valueId === valueId);
+        }
+        return false;
+      });
+
+      // Add virtual input nodes for op-produced group inputs (external values)
+      for (const inp of activeGroup.inputs) {
+        const nodeId = `input_${inp.valueId}`;
+        if (!filteredNodes.some((n) => n.id === nodeId)) {
+          filteredNodes.push({
+            id: nodeId,
+            type: 'inputNode',
+            data: {
+              label: inp.type,
+              type: inp.type,
+              valueId: inp.valueId,
+            } satisfies InputNodeData,
+            position: { x: 0, y: 0 },
+          });
+          visibleInputNodeIds.add(nodeId);
+        }
+      }
+
+      // Replace nodes array content and rebuild visibleOpIds
+      nodes.length = 0;
+      filteredNodes.forEach((n) => nodes.push(n));
+      for (const id of [...visibleOpIds]) {
+        if (!groupOpSet.has(id)) visibleOpIds.delete(id);
+      }
+    }
+  }
 
   // Generate edges between visible ops and input nodes
-  const edges = generateEdges(visibleOpIds, visibleInputNodeIds, lookups);
+  const edges = generateEdges(
+    visibleOpIds, visibleInputNodeIds, visibleGroupIds,
+    lookups, collapsedGroupByOp, collapsedGroupsMap,
+  );
 
   return { nodes, edges };
 }

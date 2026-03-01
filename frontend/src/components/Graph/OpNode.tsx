@@ -18,6 +18,8 @@ export interface OpNodeData {
   collapsed?: boolean;
   /** Number of regions on this op (shown in the collapsed indicator) */
   regionCount?: number;
+  /** When set, overrides the header/border color to indicate group membership (inline mode) */
+  groupColor?: string;
   [key: string]: unknown;
 }
 
@@ -40,22 +42,26 @@ function getDialectColor(dialect: string) {
 }
 
 function OpNode({ data }: NodeProps<OpNodeType>) {
-  const color = getDialectColor(data.dialect);
+  const dialectColor = getDialectColor(data.dialect);
+  // When in an inline group, use the group color for the header and border
+  const headerColor = data.groupColor ?? dialectColor.header;
+  const borderColor = data.groupColor ?? dialectColor.border;
   const attrEntries = Object.entries(data.attributes);
 
   return (
     <div style={{
       minWidth: 180,
-      border: `1px solid ${color.border}`,
+      border: `1px solid ${borderColor}`,
       borderRadius: 6,
-      background: '#fff',
-      // Collapsed nodes get a deeper shadow to hint "there's more inside"
+      // Lightly tint the body when grouped so the whole node is visually marked
+      background: data.groupColor ? `${data.groupColor}12` : '#fff',
       boxShadow: data.collapsed
         ? '0 3px 10px rgba(0,0,0,0.18)'
         : '0 2px 6px rgba(0,0,0,0.1)',
       fontSize: 12,
       overflow: 'hidden',
     }}>
+
       {/* Input handles */}
       {data.operands.map((_, i) => (
         <Handle
@@ -65,7 +71,7 @@ function OpNode({ data }: NodeProps<OpNodeType>) {
           id={`in-${i}`}
           style={{
             left: `${((i + 1) / (data.operands.length + 2)) * 100}%`,
-            background: color.header,
+            background: headerColor,
             width: 8,
             height: 8,
             border: '2px solid #fff',
@@ -80,7 +86,7 @@ function OpNode({ data }: NodeProps<OpNodeType>) {
         id="in-add"
         style={{
           left: `${((data.operands.length + 1) / (data.operands.length + 2)) * 100}%`,
-          background: color.header,
+          background: headerColor,
           opacity: 0.6,
           width: 12,
           height: 12,
@@ -93,7 +99,7 @@ function OpNode({ data }: NodeProps<OpNodeType>) {
 
       {/* Header */}
       <div style={{
-        background: color.header,
+        background: headerColor,
         color: '#fff',
         padding: '6px 10px',
         fontWeight: 600,
@@ -132,7 +138,7 @@ function OpNode({ data }: NodeProps<OpNodeType>) {
       {data.hasRegions && (
         <div style={{
           padding: '2px 10px 4px',
-          color: data.collapsed ? color.header : '#aaa',
+          color: data.collapsed ? headerColor : '#aaa',
           fontSize: 11,
           textAlign: 'center',
           borderTop: '1px dashed #eee',
@@ -154,7 +160,7 @@ function OpNode({ data }: NodeProps<OpNodeType>) {
           id={`out-${i}`}
           style={{
             left: `${((i + 1) / (data.results.length + 1)) * 100}%`,
-            background: color.header,
+            background: headerColor,
             width: 8,
             height: 8,
             border: '2px solid #fff',

@@ -9,7 +9,7 @@ import OpCreator from './components/OpCreator/OpCreator';
 import { loadModel, saveModel, modifyAttributes, deleteOp, deleteOpSingle, undo as apiUndo, redo as apiRedo, getHistoryStatus, createOp, setOperand, removeOperand, addOperand, addToOutput, type CreateOpRequest } from './services/api';
 import useValidation from './hooks/useValidation';
 import useKeyboardShortcuts from './hooks/useKeyboardShortcuts';
-import type { IRGraph, OperationInfo, SaveResponse, NodeGroup, GroupDisplayMode } from './types/ir';
+import type { IRGraph, OperationInfo, NodeGroup, GroupDisplayMode } from './types/ir';
 import { createNodeGroup } from './components/Graph/groupUtils';
 
 /**
@@ -42,6 +42,8 @@ function App() {
   const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false });
   const [hiddenOpNames, setHiddenOpNames] = useState<Set<string>>(new Set());
   const [nodeGroups, setNodeGroups] = useState<NodeGroup[]>([]);
+  /** When non-null, GraphView shows only ops inside this group (drilldown mode) */
+  const [activeDrillGroupId, setActiveDrillGroupId] = useState<string | null>(null);
 
   // Real-time validation via WebSocket — merge into local state
   const wsValidation = useValidation();
@@ -58,6 +60,11 @@ function App() {
    *   ['op_module', 'op_func', 'op_for'] → drilled into scf.for inside func
    */
   const [viewPath, setViewPath] = useState<string[]>([]);
+
+  // Clear group drilldown whenever the MLIR region path changes
+  useEffect(() => {
+    setActiveDrillGroupId(null);
+  }, [viewPath]);
 
   // List of top-level functions available for selection
   const functions = useMemo(() => {
@@ -116,6 +123,8 @@ function App() {
       setGraph(result);
       setSelectedOp(null);
       setValidationStatus({ valid: true, diagnostics: [] });
+      setNodeGroups([]);
+      setActiveDrillGroupId(null);
 
       const funcs = getTopLevelFunctions(result);
       if (funcs.length === 1) {
@@ -275,7 +284,8 @@ function App() {
 
   const handleUngroupGroup = useCallback((groupId: string) => {
     setNodeGroups((prev) => prev.filter((g) => g.id !== groupId));
-  }, []);
+    if (activeDrillGroupId === groupId) setActiveDrillGroupId(null);
+  }, [activeDrillGroupId]);
 
   const handleRenameGroup = useCallback((groupId: string, newName: string) => {
     setNodeGroups((prev) => prev.map((g) =>
@@ -287,6 +297,11 @@ function App() {
     setNodeGroups((prev) => prev.map((g) =>
       g.id === groupId ? { ...g, displayMode: mode } : g,
     ));
+  }, []);
+
+  // ── Group drilldown navigation ──
+  const handleGroupDrillIn = useCallback((groupId: string) => {
+    setActiveDrillGroupId(groupId || null);
   }, []);
 
   // ── Save: download current module as .mlir file ──
@@ -379,6 +394,8 @@ function App() {
           onUngroupGroup={handleUngroupGroup}
           onRenameGroup={handleRenameGroup}
           onToggleGroupMode={handleToggleGroupMode}
+          activeDrillGroupId={activeDrillGroupId}
+          onGroupDrillIn={handleGroupDrillIn}
         />
         <PropertyPanel selectedOp={selectedOp} onAttributeEdit={handleAttributeEdit} onRemoveOperand={handleDeleteEdge} />
       </div>

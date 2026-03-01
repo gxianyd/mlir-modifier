@@ -4,21 +4,29 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
   useNodesState,
   useEdgesState,
   useReactFlow,
+  SelectionMode,
   type NodeTypes,
   type Connection,
   type Edge,
   type Node,
+  type OnSelectionChangeParams,
 } from '@xyflow/react';
+import { Input, Modal } from 'antd';
 import '@xyflow/react/dist/style.css';
 
 import OpNode from './OpNode';
 import InputNode from './InputNode';
-import { irToFlow } from './irToFlow';
+import GroupNode from './GroupNode';
+import SelectionPanel from './SelectionPanel';
+import { irToFlow, type GroupHandlers } from './irToFlow';
 import { layoutGraph } from './layoutGraph';
+import { getGroupColor } from './groupUtils';
 import type { IRGraph, OperationInfo, NodeGroup, GroupDisplayMode } from '../../types/ir';
+
 
 interface GraphViewProps {
   /** The full IR graph from the backend (null if no model loaded) */
@@ -53,15 +61,19 @@ interface GraphViewProps {
   onRenameGroup?: (groupId: string, newName: string) => void;
   /** Callback to switch a group's display mode */
   onToggleGroupMode?: (groupId: string, mode: GroupDisplayMode) => void;
+  /** Currently active drilldown group ID (null = normal view) */
+  activeDrillGroupId?: string | null;
+  /** Callback to enter group drilldown */
+  onGroupDrillIn?: (groupId: string) => void;
 }
 
 /**
  * Registry of custom node types.
- * All ops are rendered as flat "opNode" cards (Netron-style).
  */
 const nodeTypes: NodeTypes = {
   opNode: OpNode,
   inputNode: InputNode,
+  groupNode: GroupNode,
 };
 
 /**
@@ -132,12 +144,16 @@ function LayoutSyncer({
  *
  * Interactions:
  *   - Single-click node → select it (shows properties in panel)
+ *   - Ctrl+click → add/remove from multi-selection
+ *   - Left-drag on canvas → box select (selectionOnDrag)
+ *   - Right-drag on canvas → pan
  *   - Double-click collapsed node → drill in (viewPath changes)
  *   - Click empty area → deselect
  *   - Right-click node → context menu with "Delete"
- *   - Delete/Backspace key → delete selected node
+ *   - Delete/Backspace key → delete selected node or edge
  *   - Drag from handle → connect (add edge)
  *   - Right-click edge → context menu with "Delete"
+ *   - Right-click group node → group context menu
  */
 export default function GraphView({
   graph,
@@ -151,15 +167,27 @@ export default function GraphView({
   onReconnectEdge,
   onAddToOutput,
   hiddenOpNames,
-  nodeGroups: _nodeGroups,
-  onCreateGroup: _onCreateGroup,
-  onUngroupGroup: _onUngroupGroup,
-  onRenameGroup: _onRenameGroup,
-  onToggleGroupMode: _onToggleGroupMode,
+  nodeGroups,
+  onCreateGroup,
+  onUngroupGroup,
+  onRenameGroup,
+  onToggleGroupMode,
+  activeDrillGroupId,
+  onGroupDrillIn,
 }: GraphViewProps) {
-  // Async ELK layout: recompute whenever graph, viewPath, or hiddenOpNames changes
+  // Async ELK layout: recompute whenever graph, viewPath, hiddenOpNames, or groups change
   const [layoutedNodes, setLayoutedNodes] = useState<Node[]>([]);
   const [layoutedEdges, setLayoutedEdges] = useState<Edge[]>([]);
+
+  // Multi-select: track selected op IDs for the SelectionPanel
+  const [selectedOpIds, setSelectedOpIds] = useState<string[]>([]);
+
+  // Build stable group handlers to pass into irToFlow
+  const groupHandlers: GroupHandlers = {
+    onRename: onRenameGroup ?? (() => {}),
+    onUngroup: onUngroupGroup ?? (() => {}),
+    onSetMode: onToggleGroupMode ?? (() => {}),
+  };
 
   useEffect(() => {
     if (!graph || viewPath.length === 0) {
@@ -168,7 +196,10 @@ export default function GraphView({
       return;
     }
     let cancelled = false;
-    const { nodes: flowNodes, edges: flowEdges } = irToFlow(graph, viewPath, 0, hiddenOpNames);
+    const { nodes: flowNodes, edges: flowEdges } = irToFlow(
+      graph, viewPath, 0, hiddenOpNames,
+      nodeGroups, activeDrillGroupId, groupHandlers,
+    );
     layoutGraph(flowNodes, flowEdges).then((result) => {
       if (!cancelled) {
         setLayoutedNodes(result.nodes);
@@ -178,7 +209,8 @@ export default function GraphView({
       console.error('ELK layout failed:', err);
     });
     return () => { cancelled = true; };
-  }, [graph, viewPath, hiddenOpNames]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph, viewPath, hiddenOpNames, nodeGroups, activeDrillGroupId]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
@@ -187,19 +219,30 @@ export default function GraphView({
   const selectedNodeIdRef = useRef<string | null>(null);
   const selectedEdgeRef = useRef<Edge | null>(null);
 
-  // Context menu state — supports both node and edge menus
+  // Context menu state — supports node, edge, and group menus
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
-    type: 'node' | 'edge';
+    type: 'node' | 'edge' | 'group';
     opId?: string;
     edge?: Edge;
+    groupId?: string;
   } | null>(null);
+
+  // Track selected op IDs for multi-select panel
+  const handleSelectionChange = useCallback(({ nodes: selectedNodes }: OnSelectionChangeParams) => {
+    const opIds = selectedNodes
+      .filter((n) => n.type === 'opNode')
+      .map((n) => n.id);
+    setSelectedOpIds(opIds);
+  }, []);
 
   // Single-click node → select node, deselect edge
   const onNodeClick = useCallback(
-    (_: React.MouseEvent, node: { id: string }) => {
+    (_: React.MouseEvent, node: { id: string; type?: string }) => {
       if (!graph) return;
+      // Don't propagate to property panel for group/background nodes
+      if (node.type === 'groupNode') return;
       const op = graph.operations.find((o) => o.op_id === node.id) || null;
       selectedNodeIdRef.current = node.id;
       selectedEdgeRef.current = null;
@@ -235,11 +278,15 @@ export default function GraphView({
     onSelectOp(null);
   }, [onSelectOp]);
 
-  // Right-click node → show context menu
+  // Right-click node → show context menu (differentiate group vs regular)
   const onNodeContextMenu = useCallback(
-    (event: React.MouseEvent, node: { id: string }) => {
+    (event: React.MouseEvent, node: { id: string; type?: string }) => {
       event.preventDefault();
-      setContextMenu({ x: event.clientX, y: event.clientY, type: 'node', opId: node.id });
+      if (node.type === 'groupNode') {
+        setContextMenu({ x: event.clientX, y: event.clientY, type: 'group', groupId: node.id });
+      } else {
+        setContextMenu({ x: event.clientX, y: event.clientY, type: 'node', opId: node.id });
+      }
     },
     [],
   );
@@ -253,7 +300,8 @@ export default function GraphView({
     [],
   );
 
-  // Handle context menu delete (node)
+  // ── Context menu handlers ──
+
   const handleContextDeleteNode = useCallback(() => {
     if (contextMenu?.type === 'node' && contextMenu.opId && onDeleteOp) {
       onDeleteOp(contextMenu.opId);
@@ -268,7 +316,6 @@ export default function GraphView({
     setContextMenu(null);
   }, [contextMenu, onDeleteOpSingle]);
 
-  // Handle context menu "Add to Output"
   const handleContextAddToOutput = useCallback((resultIndex: number) => {
     if (contextMenu?.type === 'node' && contextMenu.opId && onAddToOutput) {
       onAddToOutput(contextMenu.opId, resultIndex);
@@ -276,7 +323,6 @@ export default function GraphView({
     setContextMenu(null);
   }, [contextMenu, onAddToOutput]);
 
-  // Handle context menu delete (edge)
   const handleContextDeleteEdge = useCallback(() => {
     if (contextMenu?.type === 'edge' && contextMenu.edge && onDeleteEdge) {
       const edgeData = contextMenu.edge.data as { toOp: string; toOperandIndex: number } | undefined;
@@ -286,6 +332,60 @@ export default function GraphView({
     }
     setContextMenu(null);
   }, [contextMenu, onDeleteEdge]);
+
+  const handleContextGroupInline = useCallback(() => {
+    if (contextMenu?.type === 'group' && contextMenu.groupId) {
+      onToggleGroupMode?.(contextMenu.groupId, 'expanded');
+    }
+    setContextMenu(null);
+  }, [contextMenu, onToggleGroupMode]);
+
+  const handleContextGroupDrilldown = useCallback(() => {
+    if (contextMenu?.type === 'group' && contextMenu.groupId) {
+      onGroupDrillIn?.(contextMenu.groupId);
+    }
+    setContextMenu(null);
+  }, [contextMenu, onGroupDrillIn]);
+
+  const handleContextGroupRename = useCallback(() => {
+    const groupId = contextMenu?.groupId;
+    setContextMenu(null);
+    if (!groupId || !onRenameGroup) return;
+
+    const group = (nodeGroups ?? []).find((g) => g.id === groupId);
+    let newName = group?.name ?? '';
+
+    Modal.confirm({
+      title: 'Rename Group',
+      content: (
+        <Input
+          defaultValue={newName}
+          onChange={(e) => { newName = e.target.value; }}
+          onPressEnter={() => Modal.destroyAll()}
+          autoFocus
+        />
+      ),
+      onOk: () => {
+        const trimmed = newName.trim();
+        if (trimmed) onRenameGroup(groupId, trimmed);
+      },
+    });
+  }, [contextMenu, nodeGroups, onRenameGroup]);
+
+  const handleContextGroupUngroup = useCallback(() => {
+    if (contextMenu?.type === 'group' && contextMenu.groupId) {
+      onUngroupGroup?.(contextMenu.groupId);
+      setSelectedOpIds([]);
+    }
+    setContextMenu(null);
+  }, [contextMenu, onUngroupGroup]);
+
+  const handleContextGroupCollapse = useCallback(() => {
+    if (contextMenu?.type === 'group' && contextMenu.groupId) {
+      onToggleGroupMode?.(contextMenu.groupId, 'collapsed');
+    }
+    setContextMenu(null);
+  }, [contextMenu, onToggleGroupMode]);
 
   // Handle new connection (drag from source handle to target handle)
   const handleConnect = useCallback(
@@ -404,10 +504,15 @@ export default function GraphView({
         onPaneClick={onPaneClick}
         onConnect={handleConnect}
         onReconnect={handleReconnect}
+        onSelectionChange={handleSelectionChange}
         nodeTypes={nodeTypes}
         edgesReconnectable
         minZoom={0.1}
         maxZoom={2}
+        selectionOnDrag
+        panOnDrag={[2]}
+        multiSelectionKeyCode="Control"
+        selectionMode={SelectionMode.Partial}
       >
         <LayoutSyncer
           layoutedNodes={layoutedNodes}
@@ -418,9 +523,52 @@ export default function GraphView({
         <Background />
         <Controls />
         <MiniMap />
+
+        {/* Multi-select action panel */}
+        {graph && (
+          <SelectionPanel
+            selectedOpIds={selectedOpIds}
+            graph={graph}
+            onCreateGroup={(ids) => {
+              onCreateGroup?.(ids);
+              setSelectedOpIds([]);
+            }}
+          />
+        )}
+
+        {/* Drilldown group breadcrumb */}
+        {activeDrillGroupId && (() => {
+          const group = (nodeGroups ?? []).find((g) => g.id === activeDrillGroupId);
+          return group ? (
+            <Panel position="top-center">
+              <div style={{
+                background: '#fff',
+                border: `2px solid ${getGroupColor(group.id)}`,
+                borderRadius: 8,
+                padding: '4px 14px',
+                fontSize: 13,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                boxShadow: '0 2px 8px rgba(0,0,0,0.12)',
+              }}>
+                <span
+                  style={{ color: '#1890ff', cursor: 'pointer' }}
+                  onClick={() => onGroupDrillIn?.('')}
+                >
+                  ← Back
+                </span>
+                <span style={{ color: '#999' }}>|</span>
+                <span style={{ color: getGroupColor(group.id), fontWeight: 600 }}>
+                  Group: {group.name}
+                </span>
+              </div>
+            </Panel>
+          ) : null;
+        })()}
       </ReactFlow>
 
-      {/* Context menu — node or edge */}
+      {/* Context menu — node, edge, or group */}
       {contextMenu && (
         <div
           style={{
@@ -435,10 +583,25 @@ export default function GraphView({
             padding: '4px 0',
           }}
         >
+          {/* Regular op node context menu */}
           {contextMenu.type === 'node' && (() => {
             const op = graph?.operations.find((o) => o.op_id === contextMenu.opId);
+            const inlineGroup = (nodeGroups ?? []).find(
+              (g) => g.displayMode === 'expanded' && contextMenu.opId && g.opIds.includes(contextMenu.opId),
+            );
             return (
               <>
+                {/* Collapse inline group shortcut */}
+                {inlineGroup && onToggleGroupMode && (
+                  <div
+                    style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13, borderBottom: '1px solid #f0f0f0' }}
+                    onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                    onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                    onClick={() => { onToggleGroupMode(inlineGroup.id, 'collapsed'); setContextMenu(null); }}
+                  >
+                    Collapse Group: {inlineGroup.name}
+                  </div>
+                )}
                 {onAddToOutput && op && op.results.length > 0 && (
                   op.results.length === 1 ? (
                     <div
@@ -465,11 +628,7 @@ export default function GraphView({
                 )}
                 {onDeleteOpSingle && (
                   <div
-                    style={{
-                      padding: '6px 16px',
-                      cursor: 'pointer',
-                      fontSize: 13,
-                    }}
+                    style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13 }}
                     onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
                     onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
                     onClick={handleContextDeleteNodeSingle}
@@ -479,12 +638,7 @@ export default function GraphView({
                 )}
                 {onDeleteOp && (
                   <div
-                    style={{
-                      padding: '6px 16px',
-                      cursor: 'pointer',
-                      fontSize: 13,
-                      color: '#e74c3c',
-                    }}
+                    style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13, color: '#e74c3c' }}
                     onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
                     onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
                     onClick={handleContextDeleteNode}
@@ -495,14 +649,71 @@ export default function GraphView({
               </>
             );
           })()}
+
+          {/* Group node context menu */}
+          {contextMenu.type === 'group' && (() => {
+            const group = (nodeGroups ?? []).find((g) => g.id === contextMenu.groupId);
+            const isCollapsed = !group || group.displayMode === 'collapsed';
+            const isInline = group?.displayMode === 'expanded';
+            return (
+              <>
+                <div
+                  style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#666', borderBottom: '1px solid #f0f0f0' }}
+                >
+                  {group?.name ?? 'Group'}
+                </div>
+                {!isInline && (
+                  <div
+                    style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13 }}
+                    onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                    onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                    onClick={handleContextGroupInline}
+                  >
+                    Show Inline
+                  </div>
+                )}
+                {!isCollapsed && (
+                  <div
+                    style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13 }}
+                    onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                    onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                    onClick={handleContextGroupCollapse}
+                  >
+                    Collapse
+                  </div>
+                )}
+                <div
+                  style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13 }}
+                  onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                  onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                  onClick={handleContextGroupDrilldown}
+                >
+                  Drill Into
+                </div>
+                <div
+                  style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13 }}
+                  onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                  onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                  onClick={handleContextGroupRename}
+                >
+                  Rename
+                </div>
+                <div
+                  style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13, color: '#e74c3c', borderTop: '1px solid #f0f0f0' }}
+                  onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
+                  onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
+                  onClick={handleContextGroupUngroup}
+                >
+                  Ungroup
+                </div>
+              </>
+            );
+          })()}
+
+          {/* Edge context menu */}
           {contextMenu.type === 'edge' && onDeleteEdge && (
             <div
-              style={{
-                padding: '6px 16px',
-                cursor: 'pointer',
-                fontSize: 13,
-                color: '#e74c3c',
-              }}
+              style={{ padding: '6px 16px', cursor: 'pointer', fontSize: 13, color: '#e74c3c' }}
               onMouseEnter={(e) => { (e.target as HTMLElement).style.background = '#f5f5f5'; }}
               onMouseLeave={(e) => { (e.target as HTMLElement).style.background = 'transparent'; }}
               onClick={handleContextDeleteEdge}

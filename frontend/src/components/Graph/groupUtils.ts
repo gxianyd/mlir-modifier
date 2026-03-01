@@ -106,3 +106,17 @@ export function createNodeGroup(
     outputs,
   };
 }
+
+const GROUP_COLORS = [
+  '#1890ff', '#52c41a', '#fa8c16', '#722ed1',
+  '#eb2f96', '#13c2c2', '#f5222d', '#fadb14',
+];
+
+/**
+ * Get a deterministic color for a group based on its ID.
+ * Cycles through GROUP_COLORS palette.
+ */
+export function getGroupColor(groupId: string): string {
+  const index = parseInt(groupId.replace('group_', ''), 10) - 1;
+  return GROUP_COLORS[Math.max(0, index) % GROUP_COLORS.length];
+}
