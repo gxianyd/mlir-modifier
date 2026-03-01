@@ -9,7 +9,8 @@ import OpCreator from './components/OpCreator/OpCreator';
 import { loadModel, saveModel, modifyAttributes, deleteOp, deleteOpSingle, undo as apiUndo, redo as apiRedo, getHistoryStatus, createOp, setOperand, removeOperand, addOperand, addToOutput, type CreateOpRequest } from './services/api';
 import useValidation from './hooks/useValidation';
 import useKeyboardShortcuts from './hooks/useKeyboardShortcuts';
-import type { IRGraph, OperationInfo, SaveResponse } from './types/ir';
+import type { IRGraph, OperationInfo, SaveResponse, NodeGroup, GroupDisplayMode } from './types/ir';
+import { createNodeGroup } from './components/Graph/groupUtils';
 
 /**
  * Extract all top-level func.func operations from the graph.
@@ -40,6 +41,7 @@ function App() {
   const [showOpCreator, setShowOpCreator] = useState(false);
   const [historyStatus, setHistoryStatus] = useState({ canUndo: false, canRedo: false });
   const [hiddenOpNames, setHiddenOpNames] = useState<Set<string>>(new Set());
+  const [nodeGroups, setNodeGroups] = useState<NodeGroup[]>([]);
 
   // Real-time validation via WebSocket — merge into local state
   const wsValidation = useValidation();
@@ -258,6 +260,35 @@ function App() {
     }
   }, [applyEditResponse]);
 
+  // ── Node grouping ──
+  const handleCreateGroup = useCallback((opIds: string[]) => {
+    if (!graph || opIds.length < 2) return;
+    const existingGrouped = nodeGroups.flatMap((g) => g.opIds);
+    const conflict = opIds.find((id) => existingGrouped.includes(id));
+    if (conflict) {
+      message.warning('部分节点已在其他分组中，请先解散现有分组');
+      return;
+    }
+    const group = createNodeGroup(opIds, graph);
+    setNodeGroups((prev) => [...prev, group]);
+  }, [graph, nodeGroups]);
+
+  const handleUngroupGroup = useCallback((groupId: string) => {
+    setNodeGroups((prev) => prev.filter((g) => g.id !== groupId));
+  }, []);
+
+  const handleRenameGroup = useCallback((groupId: string, newName: string) => {
+    setNodeGroups((prev) => prev.map((g) =>
+      g.id === groupId ? { ...g, name: newName } : g,
+    ));
+  }, []);
+
+  const handleToggleGroupMode = useCallback((groupId: string, mode: GroupDisplayMode) => {
+    setNodeGroups((prev) => prev.map((g) =>
+      g.id === groupId ? { ...g, displayMode: mode } : g,
+    ));
+  }, []);
+
   // ── Save: download current module as .mlir file ──
   const handleSave = useCallback(async () => {
     try {
@@ -343,6 +374,11 @@ function App() {
           onReconnectEdge={handleReconnectEdge}
           onAddToOutput={handleAddToOutput}
           hiddenOpNames={hiddenOpNames}
+          nodeGroups={nodeGroups}
+          onCreateGroup={handleCreateGroup}
+          onUngroupGroup={handleUngroupGroup}
+          onRenameGroup={handleRenameGroup}
+          onToggleGroupMode={handleToggleGroupMode}
         />
         <PropertyPanel selectedOp={selectedOp} onAttributeEdit={handleAttributeEdit} onRemoveOperand={handleDeleteEdge} />
       </div>

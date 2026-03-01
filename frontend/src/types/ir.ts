@@ -63,3 +63,29 @@ export interface SaveResponse {
   valid: boolean;
   diagnostics: string[];
 }
+
+// ── Node Group types ──
+
+export interface GroupInput {
+  valueId: string;
+  type: string;
+  consumerOpIds: string[];
+}
+
+export interface GroupOutput {
+  valueId: string;
+  type: string;
+  producerOpId: string;
+  resultIndex: number;
+}
+
+export type GroupDisplayMode = 'collapsed' | 'expanded' | 'drilldown';
+
+export interface NodeGroup {
+  id: string;
+  name: string;
+  opIds: string[];
+  displayMode: GroupDisplayMode;
+  inputs: GroupInput[];
+  outputs: GroupOutput[];
+}

@@ -18,7 +18,7 @@ import OpNode from './OpNode';
 import InputNode from './InputNode';
 import { irToFlow } from './irToFlow';
 import { layoutGraph } from './layoutGraph';
-import type { IRGraph, OperationInfo } from '../../types/ir';
+import type { IRGraph, OperationInfo, NodeGroup, GroupDisplayMode } from '../../types/ir';
 
 interface GraphViewProps {
   /** The full IR graph from the backend (null if no model loaded) */
@@ -43,6 +43,16 @@ interface GraphViewProps {
   onAddToOutput?: (opId: string, resultIndex: number) => void;
   /** Set of op names (e.g. "arith.constant") to hide from the graph */
   hiddenOpNames?: Set<string>;
+  /** Node groups for collapsing multiple ops into one visual node */
+  nodeGroups?: NodeGroup[];
+  /** Callback to create a new group from selected op IDs */
+  onCreateGroup?: (opIds: string[]) => void;
+  /** Callback to dissolve a group */
+  onUngroupGroup?: (groupId: string) => void;
+  /** Callback to rename a group */
+  onRenameGroup?: (groupId: string, newName: string) => void;
+  /** Callback to switch a group's display mode */
+  onToggleGroupMode?: (groupId: string, mode: GroupDisplayMode) => void;
 }
 
 /**
@@ -141,6 +151,11 @@ export default function GraphView({
   onReconnectEdge,
   onAddToOutput,
   hiddenOpNames,
+  nodeGroups: _nodeGroups,
+  onCreateGroup: _onCreateGroup,
+  onUngroupGroup: _onUngroupGroup,
+  onRenameGroup: _onRenameGroup,
+  onToggleGroupMode: _onToggleGroupMode,
 }: GraphViewProps) {
   // Async ELK layout: recompute whenever graph, viewPath, or hiddenOpNames changes
   const [layoutedNodes, setLayoutedNodes] = useState<Node[]>([]);
